@@ -38,10 +38,11 @@ pip install -e .
 # 2. Verify prerequisites
 iphonebridge doctor
 
-# 3. (One-time) Make the adapter CoD setting persist across reboots.
-#    Without this, the iPhone-side "Show Message Notifications" toggle
-#    won't surface and MAP will be refused after a reboot.
-sudo bash systemd/install-cod-service.sh
+# 3. (One-time) Let the daemon set the adapter CoD on every start without
+#    a password prompt. Without this, after each reboot you'd have to
+#    manually run `sudo btmgmt class 4 8` before the daemon could open
+#    MAP/PBAP. (See spike/RESULTS.md §1 for why this CoD is load-bearing.)
+sudo bash systemd/install-cod-sudoers.sh
 
 # 4. Install + start the daemon as a systemd user service
 mkdir -p ~/.config/systemd/user
