@@ -48,13 +48,27 @@ Counterintuitive but consistent: each message's `org.bluez.obex.Message1` proper
 
 A small API divergence from MAP. `Select("int", "pb")` for the main phonebook. Documented in BlueZ but easy to miss.
 
-### 5. The BR/EDR-vs-BLE pairing question (open)
+### 5. The BR/EDR-vs-BLE pairing mutex for ANCS (CONFIRMED 2026-05-19)
 
-iPhone has a single Bluetooth controller with one MAC for both BR/EDR and BLE. Our pairing on Pop!_OS is BR/EDR (AddressType `public`). The iPhone exposes MAP/PBAP/HFP-AG over BR/EDR but **not** ANCS — which lives on BLE only.
+iPhone has a single Bluetooth controller with one MAC for both BR/EDR and BLE. Our pairing on Pop!_OS is BR/EDR (AddressType `public`). iPhone exposes MAP/PBAP/HFP-AG over BR/EDR but **not** ANCS — which lives on BLE only.
 
-Our BLE peripheral advert with ANCS solicit *should* prompt the iPhone to open a BLE GATT link, but it never did. `ancs4linux`'s docs hint that the iPhone has to pair *fresh* over BLE for ANCS to flow. That's incompatible with keeping our BR/EDR pair for MAP/PBAP — unless iOS supports dual-pairing the same device on both modes, which we did not verify (would require unpair-and-rebind on iPhone side and risks losing the toggles).
+**Path 1 (dual-pair via BLE solicit advert during fresh pair) — DOES NOT WORK.**
 
-**Phase 1 decision needed:** stick with BR/EDR + MAP/PBAP/MNS only (no per-app notification mirror), or attempt BLE-only pairing + ANCS only (no SMS/contacts). Or find/verify a dual-pair path.
+`spike/06_dualpair_test.py` ran the empirical test on 2026-05-19:
+- Forgot iPhone pair on both sides
+- Restarted bluetoothd (clean adapter state)
+- Set CoD = A/V Hands-Free
+- Registered BLE peripheral advert with `SolicitUUIDs=[ANCS UUID]` BEFORE the iPhone could see us
+- Made adapter discoverable + pairable
+- iPhone tapped pop-os under Other Devices, pair completed
+- Result: `Paired=True Connected=True ANCS=✗ MAP=✓ PBAP=✓ (14 UUIDs)`
+
+iOS treated us as a single device and bonded over BR/EDR only. The BLE advert with ANCS solicit was ignored. **Same MAC = same device to iOS**, and when both modes are offered, BR/EDR wins.
+
+**Implications for Phase 2a (ANCS for per-app notifications):**
+
+- **Path 2 (second BT adapter)** is the realistic route. A second adapter (USB BT dongle, ~$10) has a different MAC. iOS will treat it as a distinct accessory. Pair it BLE-only with ANCS; keep the built-in adapter BR/EDR-paired for MAP/PBAP. Daemon would manage both adapters.
+- **Path 3 (accept the tradeoff)** — keep MAP-led notifications, skip ANCS. SMS-only desktop mirror. We already have this; the cost of giving up is losing only third-party app notification *titles* (no bodies since iMessage isn't on MAP anyway).
 
 ### 6. iMessage absence — as expected
 
