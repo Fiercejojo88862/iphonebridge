@@ -1,0 +1,18 @@
+[Unit]
+Description=iphonebridge — set adapter CoD to A/V Hands-Free at boot
+Documentation=man:btmgmt(1)
+After=bluetooth.service
+PartOf=bluetooth.service
+ConditionPathExists=/usr/bin/btmgmt
+
+[Service]
+Type=oneshot
+# Major 4 = Audio/Video, Minor 8 (byte value, spec 0x02 << 2) = Hands-Free Device.
+# See ~/code/iphonebridge/spike/RESULTS.md §1 — this is load-bearing for the
+# iOS-side "Show Message Notifications" / "Sync Contacts" toggles to appear.
+ExecStart=/usr/bin/btmgmt class 4 8
+RemainAfterExit=yes
+
+[Install]
+# Run whenever bluetooth.service starts (boot + manual restarts).
+WantedBy=bluetooth.service

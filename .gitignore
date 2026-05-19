@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+
+# Runtime data
+*.sqlite
+*.sqlite-journal
+*.db
+*.jsonl
+*.log
+contacts_cache/
+event_log/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Phase 0 spike results aren't committed — they have personal data (contacts, SMS)
+spike/results/
+spike/results/**
+
+# Per-machine config
+config.local.toml

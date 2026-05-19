@@ -1,0 +1,24 @@
+[Unit]
+Description=iphonebridge — iPhone↔Linux Bluetooth bridge
+Documentation=https://github.com/gabrielmeir53/iphonebridge
+After=bluetooth.target graphical-session.target dbus.socket
+Wants=bluetooth.target
+Requires=dbus.socket
+
+[Service]
+Type=simple
+ExecStart=%h/code/iphonebridge/.venv/bin/iphonebridge run
+Restart=on-failure
+RestartSec=5
+# Wait up to 10s for clean shutdown
+TimeoutStopSec=10
+# Keep journald logs
+StandardOutput=journal
+StandardError=journal
+# Sandboxing: this is a user service; we deliberately don't drop privileges
+# beyond what systemd-user already provides because we need DBus access to
+# org.bluez (system bus) and org.bluez.obex / org.freedesktop.Notifications
+# (session bus).
+
+[Install]
+WantedBy=default.target

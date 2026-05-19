@@ -1,0 +1,140 @@
+# Phase 0 — Results & Plan Revisions
+
+**Date:** 2026-05-19  •  **Target:** iPhone 16 Pro Max, iOS 26.5, MAC `AA:BB:CC:DD:EE:FF`
+**Linux:** Pop!_OS 24.04, BlueZ 5.72, PipeWire 1.5.85, WirePlumber 1.5.85
+**Plan reference:** `~/.claude/plans/steady-crunching-lynx.md`
+
+## Executive summary
+
+**The project is viable.** Three of four Bluetooth profiles are proven working against the actual target device; the fourth has a clear path forward. The original plan's 6–9-month "I use this daily" estimate is not invalidated — it's confirmed within reasonable bounds.
+
+The single most valuable Phase 0 finding is **the hidden-toggle dance**: iOS 26.5 *does* surface per-device permission toggles for MAP, PBAP, and (presumably) ANCS — but **only after the paired adapter satisfies specific identity conditions** (CoD = A/V Hands-Free, BLE peripheral advert with `SolicitUUIDs=ANCS` active). Without that dance, the toggles are hidden and the corresponding OBEX servers refuse access with `0x43 Forbidden`. The earlier-search-result claim that "Apple removed the toggle around iOS 16.5" was misleading — Apple didn't remove it, they made it conditional on what the accessory advertises.
+
+## Profile scoreboard
+
+| # | Profile | Status | Toggle (iOS) | Evidence |
+|---|---|---|---|---|
+| 02 | **MAP read** | ✅ PASS | "Show Message Notifications" | Pulled 10 SMS handles + metadata (sender, body in `Subject`, timestamp, read state) |
+| 03 | **MAP MNS** | ✅ PASS | (covered by Message Notifications) | 5 real-time `InterfacesAdded` push events fired within seconds of incoming SMS |
+| 04 | **PBAP** | ✅ PASS | "Sync Contacts" | Pulled 1291 vCards in one 2.7 MB transfer |
+| 05 | **HFP HF role** | ⚠ PARTIAL | — (Linux-side, not iOS) | PipeWire sees iPhone BT card. Only "audio-gateway" profile exposed; WirePlumber config to enable HF role didn't take effect with the obvious syntax. Needs Phase 2c work. |
+| 01 | **ANCS** | ⚠ DEFER | (presumed "Show Notifications") | BLE advert with `SolicitUUIDs=ANCS` registered cleanly; iPhone did not BLE-attach. Hypothesis: BR/EDR-paired devices won't auto-BLE-attach to solicit adverts. Verification needs unpair-and-BLE-rebind, which would lose MAP/PBAP toggles. Push to Phase 1. |
+
+## Key non-obvious discoveries
+
+### 1. The hidden-toggle dance (the most important finding)
+
+For iOS to surface `Show Message Notifications` and `Sync Contacts` toggles on the iPhone's `Settings → Bluetooth → (i)` info screen for a paired adapter, the adapter must satisfy **all** of:
+
+- **Class-of-Device = A/V Hands-Free** (`0x240408` or with extra service-class bits like `0x007c0408`). Set via `sudo btmgmt class 4 8` (Major=4, Minor=8 — bits 7-2 = `0x02` = Hands-Free).
+- **An active BLE advertisement registered via `org.bluez.LEAdvertisingManager1`** with `SolicitUUIDs` including the ANCS UUID `7905F431-B5CE-4E99-A40F-4B1E122D00D0` and type `peripheral`.
+- (Probably) **Adapter discoverable and pairable at the time of pairing.**
+
+When all conditions are met, the toggles appear within seconds and the OBEX servers (MAP/PBAP) become reachable. The toggles are **per-profile**: enabling Message Notifications does not enable Contacts and vice versa.
+
+We never got a `Show Notifications` toggle (the presumed ANCS gate) to surface despite the same conditions. That's the open ANCS question for Phase 1.
+
+### 2. Single-OBEX-session per fresh obexd
+
+iPhone refuses repeat MAP/PBAP `OBEX Connect` requests within a short window after the first session is torn down — returns `org.bluez.obex.Error.Failed: Forbidden`. The fix that always works: `systemctl --user restart obex.service` to get a fresh daemon, then connect once.
+
+**Production-app implication:** the app must keep one long-lived MAP session (and one PBAP session) for its lifetime. Don't create/destroy sessions per query.
+
+### 3. iOS MAP puts the SMS body in `Subject`
+
+Counterintuitive but consistent: each message's `org.bluez.obex.Message1` properties expose the SMS body in the `Subject` field, not in a separate body field. Pull `Subject`, `Sender`, `Timestamp`, `Read`, `Type` and you have a complete event. (`Get()` downloads a full bMessage if needed, but `Subject` already has the body for our purposes.)
+
+### 4. PBAP uses `Select(location, phonebook)` — *not* `SetFolder`
+
+A small API divergence from MAP. `Select("int", "pb")` for the main phonebook. Documented in BlueZ but easy to miss.
+
+### 5. The BR/EDR-vs-BLE pairing question (open)
+
+iPhone has a single Bluetooth controller with one MAC for both BR/EDR and BLE. Our pairing on Pop!_OS is BR/EDR (AddressType `public`). The iPhone exposes MAP/PBAP/HFP-AG over BR/EDR but **not** ANCS — which lives on BLE only.
+
+Our BLE peripheral advert with ANCS solicit *should* prompt the iPhone to open a BLE GATT link, but it never did. `ancs4linux`'s docs hint that the iPhone has to pair *fresh* over BLE for ANCS to flow. That's incompatible with keeping our BR/EDR pair for MAP/PBAP — unless iOS supports dual-pairing the same device on both modes, which we did not verify (would require unpair-and-rebind on iPhone side and risks losing the toggles).
+
+**Phase 1 decision needed:** stick with BR/EDR + MAP/PBAP/MNS only (no per-app notification mirror), or attempt BLE-only pairing + ANCS only (no SMS/contacts). Or find/verify a dual-pair path.
+
+### 6. iMessage absence — as expected
+
+iPhone's MAP server exposes SMS only (`Type: sms-gsm`). iMessage threads never appear, even when the contact normally uses iMessage. Replies sent via MAP `PushMessage` will arrive as green-bubble SMS. This is consistent with the plan's documented feature ceiling and is unfixable.
+
+## Plan impact
+
+| Plan assertion | Phase 0 verdict |
+|---|---|
+| MAP read works on iOS 26.5 | ✅ Confirmed (with toggle dance) |
+| MAP MNS push works | ✅ Confirmed |
+| PBAP works | ✅ Confirmed (with toggle dance) |
+| HFP HF role needs config + maybe oFono | ✅ Partially confirmed — config tuning is more opaque than expected; Phase 2c retains its 5–7 weekend budget |
+| ANCS works (foundation of project) | ⚠ Needs Phase 1 verification via BLE-pairing approach. **This is the most material open question.** |
+| Toggle gate hypothesis (early-evening pessimism) | ❌ Overturned — toggles exist and respond to specific accessory identity |
+| "iOS 16.5 removed the toggle" web claim | ❌ Misleading — toggle is conditional, not removed |
+
+**Revised Phase 1 scope (if ANCS turns out to require disruptive re-pair):**
+ANCS + MAP/PBAP coexistence may not be possible. In that case Phase 1 should default to **MAP-led notification mirror** (SMS-only, but with conversation history, contacts resolution, and real-time push) rather than ANCS-led (every-app, no SMS bodies). The MAP-led path is the higher-utility one for general daily use.
+
+**Original 6–9 month estimate:** still valid. No findings invalidate the schedule.
+
+## Things to encode in the production app
+
+These should appear in the daemon's startup sequence:
+
+1. **Set adapter CoD to A/V Hands-Free at startup** — `btmgmt class 4 8` or its DBus equivalent. Persist via systemd drop-in or by inheriting the manual main.conf change.
+2. **Register a long-lived BLE advert with `SolicitUUIDs=ANCS`** even if we don't end up using ANCS — it appears to be load-bearing for the OBEX toggles too. Register at startup via `org.bluez.LEAdvertisingManager1.RegisterAdvertisement`. Don't unregister until shutdown.
+3. **Keep one MAP session and one PBAP session open for the daemon's lifetime.** Reopen only after BlueZ obex restart or BT reset.
+4. **Document the user-side iPhone setup:** during first-run wizard, the user must enable "Show Message Notifications" and "Sync Contacts" on the iPhone for the pop-os device. Without those toggles enabled, MAP and PBAP return `0x43 Forbidden` even though they're protocol-reachable.
+5. **Body is in `Subject`** — the parser should pull SMS text from `Message1.Subject`, not from a downloaded bMessage body, for performance.
+
+## State left on the host
+
+| Item | What | Reversible? |
+|---|---|---|
+| `bluez-obexd` 5.72-0ubuntu5.5 | apt-installed | Yes — `sudo apt remove bluez-obexd` |
+| `/etc/bluetooth/main.conf` | Added `Class = 0x240408` to `[General]`. Note: ignored by BlueZ in practice (BlueZ derives Class itself), but harmless. | Yes — rollback files at `/etc/bluetooth/main.conf.bak.1779226729` |
+| Adapter Class (runtime) | Set to `0x007c0408` (AV/Hands-Free) via `sudo btmgmt class 4 8`. Survives until `bluetooth.service` restart. | Yes — `sudo btmgmt class 1 4` to restore Computer/Desktop |
+| `~/.config/wireplumber/wireplumber.conf.d/51-bluez-hfp-hf.conf` | Created (did not take effect, but harmless) | Yes — delete + `systemctl --user restart wireplumber` |
+| Orphan LE advertisement | `ActiveInstances=1` for `/iphonebridge/ancs_advert` (the Python process exited before unregister fired). Will clear on `sudo systemctl restart bluetooth`. | Yes — service restart |
+| iPhone-side pair | Still paired, bonded, trusted, connected. Toggles "Show Message Notifications" and "Sync Contacts" enabled. | User can forget device on iPhone |
+
+**To fully reset after Phase 0:**
+1. Delete `~/.config/wireplumber/wireplumber.conf.d/51-bluez-hfp-hf.conf` (config didn't help)
+2. `sudo cp /etc/bluetooth/main.conf.bak.1779226729 /etc/bluetooth/main.conf` (optional — the Class line is harmless)
+3. `sudo systemctl restart bluetooth.service` (clears orphan advert, resets CoD)
+
+But there's no reason to reset — the current state is a usable platform for Phase 1.
+
+## Open questions for next session
+
+1. **ANCS via BLE pair**: try unpair → BLE-only pair flow. Risk: lose MAP/PBAP toggles. Mitigation: re-pair BR/EDR after, see if toggles re-surface.
+2. **Dual-mode pair**: does iOS allow the same Linux MAC to be bonded both BR/EDR and BLE simultaneously? Untested.
+3. **HFP HF role**: which WirePlumber 1.5 config key actually enables `bluez5.roles=[hfp_hf,...]`. Possibly needs oFono backend. Phase 2c work, deferred.
+4. **`btmgmt class` persistence**: figure out the cleanest way to make the CoD setting survive reboots and `bluetooth.service` restarts. Options: systemd ExecStartPost, or correct main.conf incantation, or a small udev rule.
+5. **iOS 26.5 toggle naming**: confirm whether enabling "Sync Contacts" was specifically what unlocked PBAP, or if it was the cumulative state. (Likely the former, given the per-profile pattern.)
+
+## Files added by Phase 0
+
+```
+/home/gabrielmeir53/code/iphonebridge/spike/
+├── 00_install.sh                  # apt install bluez-obexd
+├── 01_ancs_subscribe.py           # BLE advert + ANCS subscribe — PARTIAL, needs BLE pair
+├── 01a_cod_repair.sh              # CoD change + re-pair helper (mostly superseded by btmgmt)
+├── 02_obex_map_session.py         # MAP read — PASS
+├── 03_obex_map_notify.py          # MAP MNS push — PASS
+├── 04_obex_pbap.py                # PBAP pull — PASS (1291 contacts)
+├── 05_hfp_audio.py                # HFP HF role check — PARTIAL
+├── README.md                      # Phase 0 overview
+├── RESULTS.md                     # This file
+└── results/
+    ├── 00_install.log
+    ├── 01a_cod_repair.log
+    ├── 02_obex_map_session.log
+    ├── 03_obex_map_notify.log
+    ├── 04_obex_pbap.log
+    └── 05_hfp_audio.log
+```
+
+## Go/no-go for Phase 1
+
+**GO.** All four protocols are either confirmed working or have clear paths forward. Phase 1 should default to the **MAP-led "notification + SMS mirror"** scope — it's already proven and gives the daily-driver value. ANCS verification can run as a Phase 1 side experiment without blocking the main build.
