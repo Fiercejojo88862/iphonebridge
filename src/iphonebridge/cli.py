@@ -287,6 +287,77 @@ def sms_list(
         render(sender, body, ts, read=e.get("is_read", True))
 
 
+@app.command("ancs-enable")
+def ancs_enable(
+    verbose: bool = typer.Option(False, "-v", "--verbose"),
+):
+    """Enable ANCS (per-app notifications) for the paired iPhone.
+
+    Requires the sudoers helper installed via
+        sudo bash systemd/install-ancs-sudoers.sh
+
+    What this does:
+      1. Looks up the local adapter MAC.
+      2. Calls the sudoers-gated helper, which writes LastUsedBearer=le
+         into BlueZ's pairing record for the iPhone.
+      3. Disconnects + reconnects the iPhone so BlueZ uses BLE this
+         time. The running iphonebridge daemon's AncsClient will pick
+         up the ANCS characteristics as they appear.
+    """
+    _setup_logging(verbose)
+    import subprocess
+    import time
+
+    import dbus
+    import dbus.mainloop.glib
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+    sysbus = dbus.SystemBus()
+
+    # Adapter MAC via BlueZ DBus
+    try:
+        adapter_mac = str(
+            dbus.Interface(
+                sysbus.get_object("org.bluez", f"/org/bluez/{config.ADAPTER}"),
+                "org.freedesktop.DBus.Properties",
+            ).Get("org.bluez.Adapter1", "Address")
+        )
+    except dbus.exceptions.DBusException as e:
+        typer.echo(typer.style(
+            f"Couldn't read adapter MAC: {e.get_dbus_message()}",
+            fg=typer.colors.RED))
+        raise typer.Exit(code=2) from None
+
+    device_mac = config.IPHONE_MAC
+    typer.echo(f"adapter: {adapter_mac}  device: {device_mac}")
+
+    # Run the sudoers-gated helper
+    r = subprocess.run(
+        ["sudo", "-n", "/usr/local/bin/iphonebridge-set-le-bearer",
+         adapter_mac, device_mac],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        msg = r.stderr.strip() or r.stdout.strip() or "(no output)"
+        typer.echo(typer.style(f"helper failed: {msg}", fg=typer.colors.RED))
+        if "password is required" in msg or "may not run" in msg.lower():
+            typer.echo("Install the sudoers helper first:")
+            typer.echo("  sudo bash systemd/install-ancs-sudoers.sh")
+        raise typer.Exit(code=3)
+    typer.echo(typer.style(r.stdout.strip(), fg=typer.colors.GREEN))
+
+    # Cycle the BT connection so BlueZ honors the new bearer pref
+    typer.echo("cycling Bluetooth connection ...")
+    subprocess.run(["bluetoothctl", "disconnect", device_mac],
+                   capture_output=True)
+    time.sleep(2)
+    r = subprocess.run(["bluetoothctl", "connect", device_mac],
+                       capture_output=True, text=True)
+    typer.echo(r.stdout.strip().splitlines()[-1] if r.stdout else "(reconnected)")
+
+    typer.echo("\nWatch the daemon log for ANCS chars appearing:")
+    typer.echo("  journalctl --user -u iphonebridge -f | grep -i ancs")
+
+
 @app.command("pair-setup")
 def pair_setup(
     no_restart: bool = typer.Option(False, "--no-restart",
