@@ -22,6 +22,7 @@ import dbus.exceptions
 import dbus.service
 
 from iphonebridge.bus import session_bus
+from iphonebridge.obex.map_query import list_recent_messages
 from iphonebridge.obex.map_send import send_message
 from iphonebridge.obex.sessions import SessionManager
 
@@ -45,6 +46,11 @@ class MessagesService(dbus.service.Object):
                 "recipient and body must both be non-empty",
                 name="com.gabriel.iphonebridge.Error.InvalidArgs",
             )
+        if self.sessions.map is None:
+            raise dbus.exceptions.DBusException(
+                "MAP session not open — iPhone toggles probably off",
+                name="com.gabriel.iphonebridge.Error.NotReady",
+            )
         try:
             return send_message(self.sessions.map_path, recipient, body)
         except Exception as e:
@@ -52,6 +58,27 @@ class MessagesService(dbus.service.Object):
             raise dbus.exceptions.DBusException(
                 str(e), name="com.gabriel.iphonebridge.Error.SendFailed"
             )
+
+    @dbus.service.method(IFACE, in_signature="su", out_signature="s")
+    def ListRecent(self, folder: str, limit: int) -> str:  # noqa: N802
+        """Return up to `limit` recent messages from `folder` as a JSON array."""
+        import json
+        if self.sessions.map is None:
+            raise dbus.exceptions.DBusException(
+                "MAP session not open — iPhone toggles probably off",
+                name="com.gabriel.iphonebridge.Error.NotReady",
+            )
+        folder = folder or "telecom/msg/INBOX"
+        try:
+            msgs = list_recent_messages(self.sessions.map_path,
+                                        folder=folder,
+                                        limit=max(1, min(int(limit), 200)))
+        except Exception as e:
+            log.exception("ListRecent failed")
+            raise dbus.exceptions.DBusException(
+                str(e), name="com.gabriel.iphonebridge.Error.QueryFailed"
+            )
+        return json.dumps(msgs, ensure_ascii=False)
 
     @dbus.service.method(IFACE, in_signature="", out_signature="b")
     def IsHealthy(self) -> bool:  # noqa: N802

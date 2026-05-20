@@ -195,11 +195,13 @@ class ContactsResolver:
         norm = normalize_phone(raw)
         if not norm:
             return None
-        # Match exact, or suffix-match (US numbers might be stored 10 vs 11 digit)
+        # Match exact, or suffix-match (US numbers might be stored 10 vs 11 digit
+        # depending on whether the country code +1 was included). Match in BOTH
+        # directions: a 10-digit incoming might match an 11-digit stored, and
+        # vice versa.
         if norm in self._mem:
             return self._mem[norm]
-        # Try the last 10 digits (covers US +1 mismatches)
-        if len(norm) > 10:
+        if len(norm) >= 10:
             tail = norm[-10:]
             for k, v in self._mem.items():
                 if k.endswith(tail):

@@ -108,57 +108,117 @@ def contacts_sync(verbose: bool = typer.Option(False, "-v", "--verbose")):
 
 @app.command("sms-list")
 def sms_list(
-    n: int = typer.Option(20, "-n", "--limit", help="Max events to show (most recent first)"),
-    me: bool = typer.Option(False, "--me", help="Hide events you sent (sender == empty)"),
+    n: int = typer.Option(20, "-n", "--limit", help="Max messages to show (most recent first)"),
+    source: str = typer.Option("iphone", "--source",
+                               help="iphone (live MAP query) | local (JSONL log)"),
+    folder: str = typer.Option("telecom/msg/INBOX", "--folder",
+                               help="MAP folder when --source=iphone "
+                                    "(e.g. telecom/msg/INBOX or telecom/msg/sent)"),
 ):
-    """Show recent SMS events from the local JSONL log.
+    """Show recent SMS / iMessage history.
 
-    Reads ~/.local/state/iphonebridge/events.jsonl. Only includes events
-    the daemon has caught since startup — for full inbox history we'd
-    need an on-demand MAP query, deferred.
+    --source iphone (default): live MAP query via the running daemon. Shows
+        the iPhone's actual recent inbox (or other folder via --folder).
+    --source local: read ~/.local/state/iphonebridge/events.jsonl. Only
+        shows events the daemon has caught since startup, but works even
+        if the daemon isn't running.
     """
     import json
     from datetime import datetime
 
+    # ---- helper to render a record ---------------------------------------
+    def render(sender: str, body: str, ts_str: str, *, read: bool = True) -> None:
+        if len(body) > 120:
+            body = body[:119] + "…"
+        body = body.replace("\n", " ⏎ ")
+        sender_styled = typer.style(f"{sender:>20s}",
+                                    fg=typer.colors.CYAN, bold=True)
+        ts_styled = typer.style(ts_str, dim=True)
+        unread = typer.style("•", fg=typer.colors.YELLOW) if not read else " "
+        typer.echo(f"{ts_styled}  {unread} {sender_styled}  {body}")
+
+    # ---- live MAP source ------------------------------------------------
+    if source == "iphone":
+        import dbus
+        import dbus.mainloop.glib
+        dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+        bus = dbus.SessionBus()
+        try:
+            proxy = bus.get_object("com.gabriel.iphonebridge",
+                                   "/com/gabriel/iphonebridge")
+            iface = dbus.Interface(proxy, "com.gabriel.iphonebridge.Messages1")
+        except dbus.exceptions.DBusException as e:
+            typer.echo(typer.style(
+                f"Daemon not reachable on DBus: {e.get_dbus_message()}\n"
+                "Falling back to local JSONL (--source local).",
+                fg=typer.colors.YELLOW,
+            ))
+            source = "local"
+        else:
+            try:
+                raw = str(iface.ListRecent(folder, dbus.UInt32(n), timeout=30))
+            except dbus.exceptions.DBusException as e:
+                typer.echo(typer.style(
+                    f"Live query failed: {e.get_dbus_message() or e.get_dbus_name()}\n"
+                    "Falling back to local JSONL.",
+                    fg=typer.colors.YELLOW,
+                ))
+                source = "local"
+            else:
+                msgs = json.loads(raw)
+                if not msgs:
+                    typer.echo("(no messages)")
+                    return
+                # Resolve contact names via local cache
+                from iphonebridge.contacts import ContactsResolver
+                resolver = ContactsResolver()
+                for m in msgs:
+                    contact = resolver.resolve(m.get("sender") or
+                                               m.get("sender_phone_norm"))
+                    sender = contact or m.get("sender") or "?"
+                    ts_raw = m.get("timestamp", "")
+                    try:
+                        dt = datetime.fromisoformat(ts_raw)
+                        ts = dt.astimezone().strftime("%m-%d %H:%M")
+                    except (ValueError, AttributeError):
+                        ts = ts_raw[:16] if ts_raw else "??-?? ??:??"
+                    render(sender, m.get("body", ""), ts,
+                           read=m.get("read", True))
+                return
+
+    # ---- local JSONL source --------------------------------------------
     if not config.EVENTS_JSONL.exists():
         typer.echo(typer.style(
-            f"No event log yet at {config.EVENTS_JSONL}",
+            f"No local event log yet at {config.EVENTS_JSONL}",
             fg=typer.colors.YELLOW,
         ))
-        typer.echo("Is the daemon running? Try: systemctl --user status iphonebridge")
+        typer.echo("Is the daemon running? "
+                   "Try: systemctl --user status iphonebridge")
         raise typer.Exit(code=1)
 
-    raw = config.EVENTS_JSONL.read_text(errors="replace").strip().splitlines()
+    raw_lines = config.EVENTS_JSONL.read_text(errors="replace").strip().splitlines()
     events: list[dict] = []
-    for line in raw:
+    for line in raw_lines:
         try:
             events.append(json.loads(line))
         except json.JSONDecodeError:
             continue
 
-    if me:
-        events = [e for e in events if e.get("sender_phone")]
-
-    # Most recent first, capped to n
     events = events[-n:][::-1]
     if not events:
         typer.echo("(no events)")
         return
 
     for e in events:
-        sender = (e.get("contact_name") or e.get("sender_phone") or "?")
-        body = (e.get("body") or "").replace("\n", " ⏎ ")
-        if len(body) > 120:
-            body = body[:119] + "…"
+        sender = e.get("contact_name") or e.get("sender_phone") or "?"
+        body = e.get("body") or ""
         ts_raw = e.get("seen_at", "")
         try:
             dt = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
             ts = dt.astimezone().strftime("%m-%d %H:%M")
         except (ValueError, AttributeError):
             ts = ts_raw[:16]
-        sender_styled = typer.style(f"{sender:>20s}", fg=typer.colors.CYAN, bold=True)
-        ts_styled = typer.style(ts, dim=True)
-        typer.echo(f"{ts_styled}  {sender_styled}  {body}")
+        render(sender, body, ts, read=e.get("is_read", True))
 
 
 @app.command("pair-setup")
