@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Project-defining discovery (2026-05-19, post-launch)
+- **iMessage IS exposed via MAP on iOS 26.5 / iPhone 16 Pro Max**, labeled as `Type: sms-gsm` indistinguishably from SMS. This contradicts every prior Bluetooth-on-Linux writeup. Verified empirically: sender (Contact B, confirmed iMessage thread, both on iPhone) sent "test-iphonebridge-XYZ123" → daemon received and rendered the body within ~2s. See `spike/RESULTS.md` §6.
+- README, BACKLOG, and feature-ceiling sections updated to reflect that iphonebridge already mirrors iMessage in real time without a Mac relay.
+- Phase 2b (MAP send) elevated to top priority: does outgoing route as iMessage too?
+
 ### Phase 1 — MVP daemon (2026-05-19)
 - Working iphonebridge daemon: BLE-advert / CoD startup dance, long-lived MAP + PBAP sessions, MAP MNS push subscription, bMessage parsing, SQLite contacts cache, libnotify + JSONL sinks.
 - Typer CLI: `run`, `doctor`, `sms-list`, `contacts-sync`, `version`.

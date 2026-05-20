@@ -70,9 +70,27 @@ iOS treated us as a single device and bonded over BR/EDR only. The BLE advert wi
 - **Path 2 (second BT adapter)** is the realistic route. A second adapter (USB BT dongle, ~$10) has a different MAC. iOS will treat it as a distinct accessory. Pair it BLE-only with ANCS; keep the built-in adapter BR/EDR-paired for MAP/PBAP. Daemon would manage both adapters.
 - **Path 3 (accept the tradeoff)** — keep MAP-led notifications, skip ANCS. SMS-only desktop mirror. We already have this; the cost of giving up is losing only third-party app notification *titles* (no bodies since iMessage isn't on MAP anyway).
 
-### 6. iMessage absence — as expected
+### 6. iMessage IS exposed via MAP on iOS 26.5 (DISCOVERED 2026-05-19, post-launch)
 
-iPhone's MAP server exposes SMS only (`Type: sms-gsm`). iMessage threads never appear, even when the contact normally uses iMessage. Replies sent via MAP `PushMessage` will arrive as green-bubble SMS. This is consistent with the plan's documented feature ceiling and is unfixable.
+**This contradicts every other writeup in existence** (Apple Developer Forums, ancs4linux docs, BT-MAP spec discussions, the entire pre-2026 Bluetooth-on-Linux community). On iOS 26.5 / iPhone 16 Pro Max, the MAP server exposes **both SMS and iMessage**, labeled identically as `Type: sms-gsm`. iOS does not distinguish at the MAP protocol level.
+
+**How we discovered it.** After the daemon's first end-to-end success showed a "Contact A: Kk" notification, the user pointed out that his text thread with Contact A is actually iMessage (blue bubbles). To rule out an SMS fallback, a deliberate test was run: have Contact B (confirmed iMessage thread, both on iPhone) send "test-iphonebridge-XYZ123". The message arrived through MNS within ~2 s, body intact:
+
+```
+[19:27:53] new Message1 at message637055617829954636 (Status=notification Type=sms-gsm Size=0) — fetching body
+[19:27:53] sms_received from Contact B: 'test-iphonebridge-XYZ123'
+```
+
+the user confirmed: blue bubble, iMessage thread, sender on iPhone with iMessage active. No fallback.
+
+**Implications:**
+
+- **The "iMessage requires a Mac relay" assumption was wrong, at least for read on iOS 26.5.** iphonebridge already mirrors iMessage in real time — same code path as SMS.
+- **`Type: sms-gsm` is a misleading label** — iOS uses it for ALL incoming messages over MAP regardless of underlying transport. Don't use it to distinguish SMS vs iMessage; you can't, from MAP alone.
+- **Open question: does outgoing via MAP `PushMessage` route as iMessage** when the recipient is iMessage-capable, or is it always SMS? This is the next big test (Phase 2b).
+- **Older iOS versions probably behave differently.** This may be specific to iOS 26.x or a very recent change. Worth checking iOS 18/19 if we ever get hands on test devices.
+
+**Things still NOT exposed:** group iMessage / RCS, threading metadata, read receipts, typing indicators, full attachments. Just message text + sender + timestamp. That's still the killer feature for a daily-driver notification mirror.
 
 ## Plan impact
 

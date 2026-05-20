@@ -6,20 +6,29 @@ A native Linux desktop bridge for a paired iPhone over Bluetooth. SMS notificati
 
 ## What it does
 
-- **Real-time SMS push notifications.** A desktop popup appears within ~20ms of an SMS arriving on the iPhone, showing the sender's name (resolved from the iPhone's address book) and the message body.
+- **Real-time SMS *and iMessage* push notifications.** A desktop popup appears within ~20 ms of any message arriving on the iPhone, showing the sender's name (resolved from the iPhone's address book) and the message body. **iMessage included — see the surprise finding below.**
 - **Contacts sync.** 1000+ contacts pulled from the iPhone via PBAP, cached in SQLite, auto-refreshed every 24 hours.
-- **SMS history readable from the CLI.** `iphonebridge sms-list` dumps recent inbox activity from the local event log.
+- **Message history readable from the CLI.** `iphonebridge sms-list` dumps recent inbox activity from the local event log.
 - **Persistent and unattended.** Runs as a systemd user service. Auto-starts on login, restarts on failure, logs to journald.
 
-### What it explicitly does *not* (and never will) do
+### The iMessage surprise
 
-These limits come from Apple's Bluetooth stack, not Linux. Documented for honesty:
+Every prior writeup of Bluetooth MAP on iOS — Apple Developer Forums, the ancs4linux project's docs, every "your iPhone won't show iMessage over Bluetooth" SO answer — says iMessage threads are invisible to MAP and you need a Mac relay (BlueBubbles / AirMessage / Beeper) to bridge them.
 
-- **No iMessage.** iPhone's MAP server exposes carrier SMS only. iMessage threads are invisible. Replies sent through this bridge will arrive as green-bubble SMS, even to iMessage contacts. For full iMessage, you need a Mac relay (BlueBubbles / AirMessage) or a paid Beeper subscription.
-- **No per-app notification mirroring** *yet*. ANCS — the every-app notification source (Slack, WhatsApp, Mail, etc.) — is deferred to Phase 2. iOS requires a different pairing strategy for ANCS that currently conflicts with the BR/EDR pair MAP/PBAP need.
+**That's not true on iOS 26.5**, at least not on an iPhone 16 Pro Max. **iMessage flows through MAP** just like SMS, labeled identically as `Type: sms-gsm`. This project's daemon already mirrors them in real time without any special handling — same code path. See [`spike/RESULTS.md`](spike/RESULTS.md) §6 for the empirical test (sender confirmed blue-bubble iMessage thread, message arrived through our daemon with full body intact).
+
+Whether this is a recent Apple change, a long-standing-but-undocumented exposure, or specific to iOS 26.x — we don't know yet. But for the daily-driver "see my iPhone messages on Linux" use case, **it works today**.
+
+### What it explicitly does *not* do
+
+Limits that come from Apple's Bluetooth stack and which are unlikely to change:
+
+- **No outgoing iMessage send yet** — Phase 2b will test whether MAP `PushMessage` routes as iMessage to iMessage-capable recipients (or always falls back to SMS). Until that test runs, we don't know.
+- **No per-app notification mirroring yet.** ANCS — the every-app notification source (Slack, WhatsApp, Mail, etc.) — is deferred to a future Phase. iOS pairs ANCS over BLE and combines BLE+BR/EDR into a single BR/EDR bond when offered both modes; ANCS therefore needs a second BT adapter. Now that iMessage works over MAP, the urgency has dropped considerably.
 - **No outgoing call audio routing.** HFP Hands-Free role on Linux is a separate config rabbit hole (WirePlumber 1.5 + possibly oFono); deferred.
-- **No group MMS / RCS.** iPhone's MAP doesn't expose them.
-- **No notification body when iPhone's "Show Previews" is set to "When Unlocked" or "Never".** ANCS/MAP respect that setting; unfixable from Linux side.
+- **No group iMessage / MMS / RCS.** iPhone's MAP exposes 1:1 threads only.
+- **No read receipts, typing indicators, message reactions, or full attachments.** Just text + sender + timestamp. Plenty for a notification mirror.
+- **No notification body when iPhone's "Show Previews" is set to "When Unlocked" or "Never".** MAP respects that setting; unfixable from Linux side.
 
 ## Requirements
 
