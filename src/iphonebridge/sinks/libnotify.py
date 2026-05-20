@@ -46,7 +46,10 @@ _REASON_DISMISSED = 2
 class LibnotifySink:
     name = "libnotify"
 
-    def __init__(self) -> None:
+    def __init__(self, hfp=None) -> None:
+        # Optional HfpManager — when present, incoming-call popups carry
+        # Answer / Decline action buttons wired straight to it.
+        self._hfp = hfp
         self._notif = dbus.Interface(
             session_bus.get_object(
                 "org.freedesktop.Notifications",
@@ -58,11 +61,18 @@ class LibnotifySink:
         self._pending: dict[int, str] = {}
         # notification_id -> SignalMatch for the per-Message1 PropertiesChanged sub
         self._msg_subs: dict[int, object] = {}
+        # Incoming-call popups: call_path <-> notification_id
+        self._call_notifs: dict[str, int] = {}
+        self._notif_calls: dict[int, str] = {}
 
         # Listen for any of our notifications closing (dismissed, expired,
         # or programmatically closed).
         self._match = self._notif.connect_to_signal(
             "NotificationClosed", self._on_closed,
+        )
+        # Listen for action-button clicks (Answer / Decline on call popups).
+        self._action_match = self._notif.connect_to_signal(
+            "ActionInvoked", self._on_action,
         )
         log.info(
             "libnotify sink ready (persistent + bidirectional read-sync)")
@@ -131,6 +141,71 @@ class LibnotifySink:
         except dbus.exceptions.DBusException as e:
             log.error("libnotify Notify (ANCS) failed: %s", e.get_dbus_name())
 
+    # ---- HFP call events (incoming-call popups with actions) ------------
+
+    def handle_call(self, event) -> None:
+        if event.kind == "call_incoming":
+            self._show_incoming_call(event)
+        elif event.kind in ("call_active", "call_ended"):
+            # Answered (here or on the phone) or ended — drop the ringing popup.
+            self._close_call_notif(event.call_path)
+
+    def _show_incoming_call(self, event) -> None:
+        if event.call_path in self._call_notifs:
+            return  # already showing a popup for this call
+        title = f"\U0001f4de {event.display_peer}"
+        # Action buttons are only useful if we can actually act on them.
+        if self._hfp is not None:
+            actions = dbus.Array(
+                ["answer", "Answer", "decline", "Decline"], signature="s")
+        else:
+            actions = dbus.Array([], signature="s")
+        try:
+            nid = int(self._notif.Notify(
+                _APP_NAME,
+                dbus.UInt32(0),
+                "call-start-symbolic",
+                title,
+                "Incoming call",
+                actions,
+                dbus.Dictionary({"urgency": dbus.Byte(2)}, signature="sv"),
+                dbus.Int32(0),  # 0 = never expire (we close it ourselves)
+            ))
+        except dbus.exceptions.DBusException as e:
+            log.error("libnotify Notify (call) failed: %s", e.get_dbus_name())
+            return
+        self._call_notifs[event.call_path] = nid
+        self._notif_calls[nid] = event.call_path
+
+    def _close_call_notif(self, call_path: str) -> None:
+        nid = self._call_notifs.pop(call_path, None)
+        if nid is None:
+            return
+        self._notif_calls.pop(nid, None)
+        try:
+            self._notif.CloseNotification(dbus.UInt32(nid))
+        except dbus.exceptions.DBusException:
+            pass
+
+    def _on_action(self, nid, action_key) -> None:
+        try:
+            nid_i = int(nid)
+        except (TypeError, ValueError):
+            return
+        call_path = self._notif_calls.get(nid_i)
+        if call_path is None or self._hfp is None:
+            return
+        action = str(action_key)
+        try:
+            if action == "answer":
+                self._hfp.answer(call_path)
+                log.info("answered call from notification: %s", call_path)
+            elif action == "decline":
+                self._hfp.hangup(call_path)
+                log.info("declined call from notification: %s", call_path)
+        except Exception as e:
+            log.warning("call action %r failed: %s", action, e)
+
     # ---- iPhone marks read → close our popup ----------------------------
 
     def _on_msg_props(self, nid: int, iface: str, changed) -> None:
@@ -162,6 +237,11 @@ class LibnotifySink:
             return
 
         message_path = self._pending.pop(nid_i, None)
+
+        # Clean up call-popup bookkeeping if this was an incoming-call popup.
+        call_path = self._notif_calls.pop(nid_i, None)
+        if call_path is not None:
+            self._call_notifs.pop(call_path, None)
 
         # Always remove the per-message subscription, no matter the reason
         sub = self._msg_subs.pop(nid_i, None)

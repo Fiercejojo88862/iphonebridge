@@ -23,6 +23,12 @@ Plan reference: `/home/gabrielmeir53/.claude/plans/steady-crunching-lynx.md`
 | 03 | `03_obex_map_notify.py` | MAP MNS | `MessageReceived` signal within 2s of self-text | Same as 02 |
 | 04 | `04_obex_pbap.py` | PBAP / OBEX | `pb.vcf` ≥ 50 contacts parse | Fall back to manual contacts CSV |
 | 05 | `05_hfp_audio.py` | HFP HF role | SCO link up + audio routable | Drop Phase 2c (call answer) |
+| 05b | `05b_hfp_ofono.py` | HFP HF role (oFono) | oFono call control + caller ID + SCO audio; outgoing dial reliability measured | Pick a fallback backend per the in-script decision gate |
+
+> `05b` is a later, interactive guided test (places real calls) for the
+> Phase A HFP feature. Prereq: `sudo apt install ofono && sudo systemctl
+> enable --now ofono`. It writes a WirePlumber config for the oFono HFP
+> backend on first run, then exits asking for a restart + reconnect.
 
 ## iPhone-side prerequisites
 

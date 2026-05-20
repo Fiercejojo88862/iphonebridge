@@ -24,6 +24,29 @@ against iPhone 16 Pro Max running iOS 26.5.
 - No group iMessage / MMS / RCS (MAP is 1:1 only)
 - No outgoing call audio routing (HFP HF role — Phase 2c)
 
+## [0.3.0] — 2026-05-20
+
+### Phase 2c — HFP Hands-Free calls
+
+- **Take and place iPhone calls on the laptop.** New `src/iphonebridge/hfp/`
+  subsystem: call control runs through oFono (`org.ofono`, system bus), and
+  call audio (SCO) rides PipeWire's oFono HFP backend.
+- Incoming calls raise a desktop notification with **Answer / Decline**
+  buttons; caller ID is resolved against the contacts cache.
+- New CLI: `call <number|contact>`, `hangup`, `calls`, and `hfp-enable`
+  (writes the WirePlumber config that routes HFP through oFono).
+- New D-Bus interface `com.gabriel.iphonebridge.Calls1` — `Dial`,
+  `AnswerCall`, `HangupCall`, `HangupAll`, `ListCalls`, and a
+  `CallStateChanged` signal.
+- Daemon: sinks now initialise independently of the MAP/PBAP sessions, so
+  ANCS and call notifications reach the desktop even in degraded mode.
+- Empirically confirmed against iPhone 16 Pro Max / iOS 26.5 — including
+  **3/3 reliable outgoing dials**, which overturns the old "HFP HF can't
+  reliably ATD on iPhone" assumption. See `spike/05b_hfp_ofono.py` and the
+  HFP addendum in `spike/RESULTS.md`.
+- `pyproject.toml`: `testpaths = ["tests"]` so a bare `pytest` no longer
+  recurses (and hangs on) the whole repo tree.
+
 ## [Unreleased]
 
 ### Project-defining discoveries (2026-05-19, post-launch)

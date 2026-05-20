@@ -31,6 +31,10 @@ class JsonlSink:
         """Same JSONL, kind: 'ancs_notification' instead of 'sms_received'."""
         self._append(event.to_dict())
 
+    def handle_call(self, event) -> None:
+        """Same JSONL, kind: 'call_*' (see CallEvent.to_dict)."""
+        self._append(event.to_dict())
+
     def _append(self, payload: dict) -> None:
         try:
             with self.path.open("a", encoding="utf-8") as f:

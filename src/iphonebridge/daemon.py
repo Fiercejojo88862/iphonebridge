@@ -31,6 +31,8 @@ from iphonebridge.bus import main_loop
 from iphonebridge.contacts import ContactsResolver, pull_phonebook
 from iphonebridge.dbus_service import MessagesService, claim_bus_name
 from iphonebridge.events import SmsEvent
+from iphonebridge.hfp.events import CallEvent
+from iphonebridge.hfp.ofono_client import HfpManager
 from iphonebridge.obex.map_events import MapEventListener
 from iphonebridge.obex.sessions import SessionError, SessionManager
 from iphonebridge.sinks import Sink
@@ -54,6 +56,7 @@ class Daemon:
         self.sinks: list[Sink] = []
         self.listener: MapEventListener | None = None
         self.ancs: AncsClient | None = None
+        self.hfp: HfpManager | None = None
         self._contacts_refresh_id: int | None = None
         self._session_retry_id: int | None = None
         self._bus_name = None
@@ -73,9 +76,6 @@ class Daemon:
                 "adapter is in A/V Hands-Free CoD if the toggles aren't there."
             )
 
-        # Try to open MAP/PBAP. If blocked, stay alive and retry every minute.
-        self._try_open_sessions(first_attempt=True)
-
         # ANCS — per-app notifications via BLE GATT. Independent of MAP/PBAP;
         # may or may not work depending on whether BlueZ has established a
         # BLE link to the iPhone (we don't yet do the LastUsedBearer=le
@@ -88,12 +88,28 @@ class Daemon:
         self.ancs = AncsClient(device_path, on_event=self._fanout_ancs)
         self.ancs.start()
 
+        # HFP — take/place calls via oFono. Also independent of MAP/PBAP; if
+        # oFono isn't set up it logs a hint and stays dormant.
+        self.hfp = HfpManager(
+            on_event=self._fanout_call,
+            resolve_contact=lambda raw: self.contacts.resolve(raw),
+        )
+        self.hfp.start()
+
+        # Sinks don't need the OBEX sessions — set them up now so ANCS and
+        # HFP events still reach the desktop while MAP/PBAP are degraded.
+        self._setup_sinks()
+
+        # Try to open MAP/PBAP. If blocked, stay alive and retry every minute.
+        self._try_open_sessions(first_attempt=True)
+
         # Always set up the DBus service so a CLI can at least query
         # IsHealthy and learn the daemon's status. Send() will fail until
         # the MAP session is open, but the service surface itself is up.
         try:
             self._bus_name = claim_bus_name()
-            self._dbus_service = MessagesService(self._bus_name, self.sessions)
+            self._dbus_service = MessagesService(
+                self._bus_name, self.sessions, hfp=self.hfp)
             log.info("DBus service ready: com.gabriel.iphonebridge")
         except Exception:
             log.exception("DBus service registration failed — continuing "
@@ -152,6 +168,18 @@ class Daemon:
         self._session_retry_id = None
         return False
 
+    def _setup_sinks(self) -> None:
+        """Register the JSONL + libnotify sinks. Independent of the OBEX
+        sessions, so ANCS/HFP events reach the desktop even in degraded mode."""
+        if self.sinks:
+            return
+        self.sinks.append(JsonlSink())
+        try:
+            self.sinks.append(LibnotifySink(hfp=self.hfp))
+        except Exception:
+            log.exception("libnotify sink failed to init — continuing")
+        log.info("sinks ready: %s", [s.name for s in self.sinks])
+
     def _post_sessions_setup(self) -> None:
         """Everything that requires live MAP+PBAP sessions. Idempotent so
         we can call it either at first-attempt success or at retry success."""
@@ -169,14 +197,6 @@ class Daemon:
             self._contacts_refresh_id = GLib.timeout_add_seconds(
                 CONTACTS_REFRESH_SEC, self._periodic_refresh_contacts
             )
-
-        # Set up sinks
-        if not self.sinks:
-            self.sinks.append(JsonlSink())
-            try:
-                self.sinks.append(LibnotifySink())
-            except Exception:
-                log.exception("libnotify sink failed to init — continuing")
 
         # Wire up MAP MNS listener.
         # IMPORTANT: pass an indirect lambda so the resolver can be refreshed
@@ -222,6 +242,8 @@ class Daemon:
             self.listener.stop()
         if self.ancs is not None:
             self.ancs.stop()
+        if self.hfp is not None:
+            self.hfp.stop()
         self.sessions.close_all()
         bluez_setup.unregister_advert()
         main_loop.quit()
@@ -253,6 +275,19 @@ class Daemon:
             except Exception:
                 log.exception("sink %s failed on ANCS event %d",
                               sink.name, event.notification_id)
+
+    def _fanout_call(self, event: CallEvent) -> None:
+        for sink in self.sinks:
+            try:
+                handler = getattr(sink, "handle_call", None)
+                if handler is None:
+                    continue  # sink doesn't know about call events
+                handler(event)
+            except Exception:
+                log.exception("sink %s failed on call event %s",
+                              sink.name, event.call_path)
+        if self._dbus_service is not None:
+            self._dbus_service.emit_call_state(event)
 
     def _signal(self, signum, _frame):
         log.info("received signal %d, stopping", signum)

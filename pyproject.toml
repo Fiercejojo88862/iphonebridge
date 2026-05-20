@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "iphonebridge"
-version = "0.2.0"
+version = "0.3.0"
 description = "Bluetooth bridge from iPhone to Linux desktop — SMS + notifications + contacts"
 authors = [{name = "Gabe Shatunovsky", email = "gabriel@shatunovsky.com"}]
 license = {text = "GPL-2.0-or-later"}
@@ -37,6 +37,12 @@ iphonebridge = "iphonebridge.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+# Without this, a bare `pytest` from the repo root recurses the whole tree
+# (src/, spike/, .venv probing, …) during collection and can hang. Scope
+# collection to the test suite — matches what CI runs.
+testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100

@@ -19,6 +19,41 @@ The single most valuable Phase 0 finding is **the hidden-toggle dance**: iOS 26.
 | 04 | **PBAP** | ✅ PASS | "Sync Contacts" | Pulled 1291 vCards in one 2.7 MB transfer |
 | 05 | **HFP HF role** | ⚠ PARTIAL | — (Linux-side, not iOS) | PipeWire sees iPhone BT card. Only "audio-gateway" profile exposed; WirePlumber config to enable HF role didn't take effect with the obvious syntax. Needs Phase 2c work. |
 | 01 | **ANCS** | ⚠ DEFER | (presumed "Show Notifications") | BLE advert with `SolicitUUIDs=ANCS` registered cleanly; iPhone did not BLE-attach. Hypothesis: BR/EDR-paired devices won't auto-BLE-attach to solicit adverts. Verification needs unpair-and-BLE-rebind, which would lose MAP/PBAP toggles. Push to Phase 1. |
+| 05b | **HFP HF role** (oFono) | ✅ PASS | — (Linux-side) | See the 2026-05-20 addendum below — oFono call control, caller ID, SCO audio, and 3/3 outgoing dials all confirmed. |
+
+## Addendum — 2026-05-20: HFP HF role confirmed (spike 05b)
+
+Phase 2c revisited the HFP Hands-Free role with `spike/05b_hfp_ofono.py`,
+this time testing call **control** — not just whether PipeWire sees the audio
+card. **Every check passed against iPhone 16 Pro Max / iOS 26.5.**
+
+| Check | Result |
+|---|---|
+| oFono exposes an HFP modem with `VoiceCallManager` | ✅ PASS |
+| Incoming call → `CallAdded` with caller ID (`LineIdentification`) | ✅ PASS (`+1407…`) |
+| `Answer()` → SCO audio routes to the laptop | ✅ PASS |
+| `Hangup()` ends the call cleanly | ✅ PASS |
+| Outgoing `Dial()` actually rings the target | ✅ **3/3** |
+| Negotiated codec | mSBC (wideband) |
+
+Key findings:
+
+- **The architecture is oFono + PipeWire.** oFono (`org.ofono`, system bus)
+  owns the HFP protocol and exposes call control on D-Bus; PipeWire's oFono
+  HFP backend carries the SCO call audio. WirePlumber needs one config key —
+  `bluez5.hfphsp-backend = "ofono"` — which `iphonebridge hfp-enable` writes.
+
+- **Startup ordering matters.** oFono and PipeWire's *native* HFP backend
+  both try to register the HFP profile with BlueZ; whoever loses logs
+  `RegisterProfile … UUID already registered` and never gets a working modem.
+  Fix: bring WirePlumber up on the oFono backend first, *then* (re)start oFono.
+
+- **The stale "Won't do" assumption was wrong.** `BACKLOG.md` had claimed
+  "HFP HF role can't reliably ATD on iPhone." Outgoing dial succeeded 3/3 —
+  placing calls from the laptop works fine. The note has been corrected.
+
+This upgrades the row-05 verdict from ⚠ PARTIAL to ✅ PASS and unblocked the
+HFP integration shipped in `src/iphonebridge/hfp/`.
 
 ## Key non-obvious discoveries
 

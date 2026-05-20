@@ -28,6 +28,7 @@ Microsoft's **Phone Link** gives Windows users their iPhone's texts and notifica
 | 📤 **Send SMS + iMessage** from the CLI | MAP `PushMessage` | ✅ |
 | 👤 **Contact-name resolution** (1000s of contacts) | PBAP → SQLite cache | ✅ |
 | 🔔 **Every app's notifications** — Slack, WhatsApp, Mail… | ANCS over BLE | ✅ |
+| 📞 **Take & place phone calls** — caller ID, answer/decline, dial | HFP via oFono | ✅ |
 | 🔁 **Read-state sync** — read on either device, syncs to both | MAP read-state writes | ✅ |
 | 📜 **Message history** from the terminal | `iphonebridge sms-list` | ✅ |
 | ⚙️ Runs unattended as a **systemd user service** | — | ✅ |
@@ -48,7 +49,7 @@ As far as we know, **iphonebridge is the first free, open-source, Mac-free iMess
 | **Bluetooth adapter** | Intel chipset (for ANCS) | Intel AX-series |
 | **Python** | 3.10+ | 3.12 |
 | **iPhone** | iOS 16.5+ | iPhone 16 Pro Max, iOS 26.5 |
-| **System packages** | `bluez`, `bluez-obexd`, `python3-dbus`, `python3-gi` | — |
+| **System packages** | `bluez`, `bluez-obexd`, `python3-dbus`, `python3-gi` (+ `ofono` for calls) | — |
 
 > ⚠️ **Adapter chipset matters for ANCS.** Per-app notifications need a real BLE bond with the iPhone. Intel adapters do this reliably. **Realtek adapters and every USB Bluetooth dongle tested so far do *not*** — their firmware negotiates legacy keys that block the cross-transport key derivation iOS needs. SMS/iMessage/contacts (MAP/PBAP) work on any adapter; only ANCS is picky. See [bmh129/ancs4linux's hardware notes](https://github.com/bmh129/ancs4linux).
 
@@ -124,6 +125,29 @@ Then **forget + re-pair** the iPhone one more time (the wizard walks you through
 </details>
 
 <details>
+<summary><b>7 · (Optional) Enable phone calls — HFP</b></summary>
+
+To take and place calls on the laptop, iphonebridge uses **oFono** for HFP
+call control and PipeWire's oFono backend for the call audio.
+
+```bash
+# Install oFono
+sudo apt install ofono
+sudo systemctl enable --now ofono
+
+# Write the WirePlumber config + print the remaining steps
+iphonebridge hfp-enable
+```
+
+`hfp-enable` writes `~/.config/wireplumber/wireplumber.conf.d/51-bluez-hfp-hf.conf`
+(routing HFP through oFono) and restarts WirePlumber. Follow its printed
+steps — restart oFono **after** WirePlumber so it can claim the HFP profile,
+reconnect the iPhone, restart the daemon — and incoming calls will pop up
+with **Answer / Decline** buttons. Place calls with `iphonebridge call`.
+
+</details>
+
+<details>
 <summary><b>(Optional) Persist the Bluetooth class across reboots</b></summary>
 
 ```bash
@@ -148,6 +172,12 @@ iphonebridge sms-list --source local         # from the daemon's own log
 # Send — recipient can be a phone number OR a contact name
 iphonebridge sms-send "+15551234567" "on my way"
 iphonebridge sms-send Maddie "running late"
+
+# Place / manage calls — needs HFP set up (install step 7)
+iphonebridge call Maddie               # call by contact name
+iphonebridge call "+15551234567"       # …or by number
+iphonebridge calls                     # list active calls
+iphonebridge hangup                    # end the call
 
 # Health check
 iphonebridge doctor
@@ -184,7 +214,8 @@ Incoming messages appear as **persistent GNOME notifications** — they stay unt
 - **MAP** (Message Access Profile) — read SMS/iMessage, get real-time push of new ones, and send.
 - **PBAP** (Phone Book Access Profile) — pull the iPhone's contacts so messages show names, not numbers.
 - **ANCS** (Apple Notification Center Service) — every app's notifications, over a BLE GATT link.
-- One daemon, pluggable **sinks** (desktop popups, append-only JSONL log), and a **D-Bus service** so the CLI can send messages through the daemon's live session.
+- **HFP** (Hands-Free Profile) — take and place calls; oFono speaks the HFP protocol, PipeWire's oFono backend carries the call audio to the laptop's mic/speakers.
+- One daemon, pluggable **sinks** (desktop popups, append-only JSONL log), and a **D-Bus service** so the CLI can send messages and control calls through the daemon's live session.
 
 Design rationale and the empirical Bluetooth findings that shaped it are in [`spike/RESULTS.md`](spike/RESULTS.md).
 
@@ -224,12 +255,11 @@ These are Apple's Bluetooth-stack limits, not bugs:
 
 - No iMessage **attachments, reactions, read receipts, or typing indicators** (MAP doesn't carry them).
 - No **group iMessage / MMS / RCS** — MAP is 1-to-1 only.
-- No **incoming-call audio** routed to the desktop yet (HFP HF role — planned).
+- HFP calls are **1-to-1 voice only** — no conference calls, no FaceTime (HFP carries neither).
 - Notification *bodies* are subject to the iPhone's "Show Previews" setting.
 
 ## 🗺️ Roadmap
 
-- **HFP HF role** — take iPhone calls through laptop speakers/mic.
 - **GTK4 / libadwaita UI** — a real conversation window, not just notifications.
 - Flatpak packaging.
 

@@ -490,6 +490,151 @@ def sms_send(
     ))
 
 
+def _daemon_iface(iface_name: str):
+    """Build an Interface onto the running daemon's session-bus object.
+
+    The proxy is lazy — connection errors surface when a method is called,
+    so callers should wrap the actual call in a try/except.
+    """
+    import dbus
+    import dbus.mainloop.glib
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+    bus = dbus.SessionBus()
+    proxy = bus.get_object("com.gabriel.iphonebridge",
+                           "/com/gabriel/iphonebridge")
+    return dbus.Interface(proxy, iface_name)
+
+
+@app.command()
+def call(
+    recipient: str = typer.Argument(...,
+        help="Phone number (e.g. +15551234567) OR contact name (e.g. 'Maddie')"),
+    verbose: bool = typer.Option(False, "-v", "--verbose"),
+):
+    """Place a phone call through the iPhone (HFP Hands-Free).
+
+    Call audio routes through the laptop's mic + speakers. Requires the
+    daemon running and HFP set up — see `iphonebridge hfp-enable`.
+    """
+    _setup_logging(verbose)
+    import dbus
+
+    resolved = _resolve_recipient(recipient)
+    iface = _daemon_iface("com.gabriel.iphonebridge.Calls1")
+    try:
+        call_path = str(iface.Dial(resolved, timeout=45))
+    except dbus.exceptions.DBusException as e:
+        typer.echo(typer.style(
+            f"Call failed: {e.get_dbus_name()}\n  {e.get_dbus_message()}",
+            fg=typer.colors.RED,
+        ))
+        typer.echo("Is the daemon running and the iPhone connected? "
+                   "Try `iphonebridge hfp-enable`.")
+        raise typer.Exit(code=3) from None
+    typer.echo(typer.style(f"Calling {resolved} …  ({call_path})",
+                           fg=typer.colors.GREEN))
+
+
+@app.command()
+def hangup(verbose: bool = typer.Option(False, "-v", "--verbose")):
+    """Hang up all active phone calls."""
+    _setup_logging(verbose)
+    import dbus
+
+    iface = _daemon_iface("com.gabriel.iphonebridge.Calls1")
+    try:
+        iface.HangupAll(timeout=30)
+    except dbus.exceptions.DBusException as e:
+        typer.echo(typer.style(
+            f"Hangup failed: {e.get_dbus_message() or e.get_dbus_name()}",
+            fg=typer.colors.RED,
+        ))
+        raise typer.Exit(code=3) from None
+    typer.echo("Hung up.")
+
+
+@app.command()
+def calls(verbose: bool = typer.Option(False, "-v", "--verbose")):
+    """List active phone calls."""
+    _setup_logging(verbose)
+    import json
+
+    import dbus
+
+    iface = _daemon_iface("com.gabriel.iphonebridge.Calls1")
+    try:
+        raw = str(iface.ListCalls(timeout=20))
+    except dbus.exceptions.DBusException as e:
+        typer.echo(typer.style(
+            f"Query failed: {e.get_dbus_message() or e.get_dbus_name()}",
+            fg=typer.colors.RED,
+        ))
+        raise typer.Exit(code=3) from None
+    data = json.loads(raw)
+    if not data:
+        typer.echo("(no active calls)")
+        return
+    for c in data:
+        peer = c.get("contact_name") or c.get("peer_phone") or "(unknown)"
+        arrow = "←" if c.get("direction") == "incoming" else "→"
+        typer.echo(f"  {arrow} {peer:<24s}  {c.get('state', '?')}")
+
+
+@app.command("hfp-enable")
+def hfp_enable(verbose: bool = typer.Option(False, "-v", "--verbose")):
+    """Set up HFP call support.
+
+    Writes the WirePlumber config that routes HFP/HSP through oFono (so
+    call control is available on D-Bus), restarts WirePlumber, and prints
+    the remaining root-only steps. HFP lets you take and place iPhone
+    calls on the laptop — caller ID, answer/decline, dialing.
+    """
+    _setup_logging(verbose)
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    from iphonebridge.hfp.ofono_client import write_wireplumber_config
+
+    path, backup = write_wireplumber_config()
+    if backup:
+        typer.echo(f"Wrote {path}  (previous backed up → {backup})")
+    else:
+        typer.echo(f"Wrote {path}")
+
+    typer.echo("Restarting WirePlumber / PipeWire …")
+    subprocess.run(
+        ["systemctl", "--user", "restart",
+         "wireplumber", "pipewire", "pipewire-pulse"],
+        check=False,
+    )
+
+    ofono_installed = bool(shutil.which("ofonod")) \
+        or Path("/usr/sbin/ofonod").exists()
+    typer.echo("")
+    if ofono_installed:
+        typer.echo(typer.style("oFono is installed.", fg=typer.colors.GREEN))
+        typer.echo("Finish setup — this needs root, run it yourself:")
+        typer.echo(typer.style(
+            "  sudo systemctl restart ofono", fg=typer.colors.WHITE))
+        typer.echo("    (restart oFono AFTER WirePlumber so it can claim the "
+                   "HFP profile)")
+    else:
+        typer.echo(typer.style("oFono is NOT installed.",
+                               fg=typer.colors.YELLOW))
+        typer.echo("Install it and enable the service — needs root:")
+        typer.echo(typer.style(
+            "  sudo apt install ofono", fg=typer.colors.WHITE))
+        typer.echo(typer.style(
+            "  sudo systemctl enable --now ofono", fg=typer.colors.WHITE))
+
+    typer.echo(f"  bluetoothctl disconnect {config.IPHONE_MAC}")
+    typer.echo(f"  bluetoothctl connect {config.IPHONE_MAC}")
+    typer.echo("")
+    typer.echo("Then restart the daemon:  "
+               "systemctl --user restart iphonebridge")
+
+
 @app.command()
 def version():
     """Print version and exit."""

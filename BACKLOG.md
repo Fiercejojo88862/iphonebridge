@@ -18,7 +18,11 @@ Park ideas here so they don't derail Phase 1.
 - [ ] **Notification dismissal sync** — dismissing a libnotify popup → mark MAP `Message1.Status = "read"` on the iPhone.
 - [ ] **`iphonebridge sms list` from MAP, not just JSONL** — pull recent inbox on demand via the live MAP session.
 - [ ] **ANCS** for per-app notifications (Slack/WhatsApp/etc.) — deprioritized since iMessage already comes through. **Update 2026-05-20:** The fork [bmh129/ancs4linux](https://github.com/bmh129/ancs4linux) is actively developing fixes for the exact BR/EDR-vs-BLE coexistence issue our Phase 0 found. Key commit `0db80f3` fixes `_trigger_gatt_discovery` to probe ANCS UUIDs in the DBus tree instead of trusting `ServicesResolved`, plus uses `LastUsedBearer=le` to bias toward BLE reconnects. **No USB BT dongle needed** — bmh129 explicitly documents that no tested USB adapter works with ANCS on Linux (Realtek firmware uses P-192 keys, blocking CTKD). Our Intel-chipset adapter is the recommended hardware. Phase 2a path: vendor or port their fix into iphonebridge.
-- [ ] **HFP HF role** — needs WirePlumber 1.5 config investigation; possibly oFono backend.
+- [x] **HFP HF role** — **DONE 2026-05-20.** Take *and* place iPhone calls on
+  the laptop via oFono (`org.ofono`) for call control + PipeWire's oFono HFP
+  backend for SCO audio. Caller ID, answer/decline, dialing, all confirmed
+  (spike `05b_hfp_ofono.py`, `spike/RESULTS.md` HFP addendum). CLI: `call`,
+  `hangup`, `calls`, `hfp-enable`.
 - [ ] GTK4 / libadwaita tray + conversation window
 
 ## Phase 3 / nice-to-have
@@ -32,5 +36,6 @@ Park ideas here so they don't derail Phase 1.
 - ~~iMessage send/read~~ — *update 2026-05-19: iMessage *read* works via MAP on iOS 26.5! Send TBD.*
 - Per-app reply (ANCS is read-only, no protocol path)
 - Group iMessage / MMS / RCS (1:1 only)
-- Outgoing calls from laptop (HFP HF role can't reliably ATD on iPhone)
+- ~~Outgoing calls from laptop~~ — *update 2026-05-20: WRONG. HFP HF `Dial`
+  rings the target reliably (3/3 in spike 05b). Outgoing calls now ship.*
 - Read receipts, typing indicators, message reactions, full attachments
