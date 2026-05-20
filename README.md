@@ -61,6 +61,12 @@ python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 pip install -e .
 
+# 3b. Expose `iphonebridge` on your PATH so you don't have to activate the
+#    venv every time you want to run sms-list/sms-send. Most distros have
+#    ~/.local/bin in PATH by default.
+mkdir -p ~/.local/bin
+ln -sf "$(pwd)/.venv/bin/iphonebridge" ~/.local/bin/iphonebridge
+
 # 4. Verify prerequisites
 iphonebridge doctor
 
