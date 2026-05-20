@@ -31,6 +31,7 @@ Microsoft's **Phone Link** gives Windows users their iPhone's texts and notifica
 | 📞 **Take & place phone calls** — caller ID, answer/decline, dial | HFP via oFono | ✅ |
 | 🔁 **Read-state sync** — read on either device, syncs to both | MAP read-state writes | ✅ |
 | 📜 **Message history** from the terminal | `iphonebridge sms-list` | ✅ |
+| 🖥️ **Desktop app** — conversations, notification feed, call UI | GTK4 / libadwaita | ✅ |
 | ⚙️ Runs unattended as a **systemd user service** | — | ✅ |
 
 ### 🤯 The iMessage surprise
@@ -59,6 +60,8 @@ As far as we know, **iphonebridge is the first free, open-source, Mac-free iMess
 
 ```bash
 sudo apt install bluez bluez-obexd python3-dbus python3-gi python3-venv
+# For the desktop app (iphonebridge-ui):
+sudo apt install gir1.2-gtk-4.0 gir1.2-adw-1
 ```
 
 ### 2 · Clone & install
@@ -73,9 +76,10 @@ python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 pip install -e .
 
-# Put `iphonebridge` on your PATH so it works from any shell
+# Put `iphonebridge` (CLI + daemon) and `iphonebridge-ui` (app) on your PATH
 mkdir -p ~/.local/bin
 ln -sf "$(pwd)/.venv/bin/iphonebridge" ~/.local/bin/iphonebridge
+ln -sf "$(pwd)/.venv/bin/iphonebridge-ui" ~/.local/bin/iphonebridge-ui
 ```
 
 ### 3 · Pair your iPhone
@@ -187,6 +191,9 @@ iphonebridge contacts-sync
 
 # Service control
 systemctl --user {start,stop,restart} iphonebridge
+
+# Graphical app — conversations, notification feed, call UI, setup
+iphonebridge-ui
 ```
 
 Incoming messages appear as **persistent GNOME notifications** — they stay until you either dismiss them on the desktop *or* read the message on your iPhone. Read-state syncs both ways.
@@ -260,7 +267,6 @@ These are Apple's Bluetooth-stack limits, not bugs:
 
 ## 🗺️ Roadmap
 
-- **GTK4 / libadwaita UI** — a real conversation window, not just notifications.
 - Flatpak packaging.
 
 See [`BACKLOG.md`](BACKLOG.md).

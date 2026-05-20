@@ -264,6 +264,8 @@ class Daemon:
             except Exception:
                 log.exception("sink %s failed on event %s",
                               sink.name, event.handle)
+        if self._dbus_service is not None:
+            self._dbus_service.emit_message(event)
 
     def _fanout_ancs(self, event: AncsEvent) -> None:
         for sink in self.sinks:
@@ -275,6 +277,8 @@ class Daemon:
             except Exception:
                 log.exception("sink %s failed on ANCS event %d",
                               sink.name, event.notification_id)
+        if self._dbus_service is not None:
+            self._dbus_service.emit_ancs(event)
 
     def _fanout_call(self, event: CallEvent) -> None:
         for sink in self.sinks:

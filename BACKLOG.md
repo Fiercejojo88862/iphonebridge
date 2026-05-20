@@ -23,7 +23,10 @@ Park ideas here so they don't derail Phase 1.
   backend for SCO audio. Caller ID, answer/decline, dialing, all confirmed
   (spike `05b_hfp_ofono.py`, `spike/RESULTS.md` HFP addendum). CLI: `call`,
   `hangup`, `calls`, `hfp-enable`.
-- [ ] GTK4 / libadwaita tray + conversation window
+- [x] **GTK4 / libadwaita app** — **DONE 2026-05-20.** Standalone `iphonebridge-ui`
+  (separate process, talks to the daemon over D-Bus): conversations, ANCS
+  notification feed, call UI, and a setup/status page. Daemon gained an
+  `Events1` D-Bus signal interface for the UI to subscribe to.
 
 ## Phase 3 / nice-to-have
 - [ ] Encrypted SQLite for message cache

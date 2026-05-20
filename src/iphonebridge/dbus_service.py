@@ -20,6 +20,11 @@ Calls1 (HFP, via oFono):
   • ListCalls() → string json
   • CallStateChanged(dict)  [signal] — emitted on every call lifecycle change
 
+Events1 (live event feed for separate UIs):
+  • MessageReceived(dict)   [signal] — a new SMS/iMessage arrived
+  • MessageSeen(dict)       [signal] — a message's read-state changed
+  • AncsNotification(dict)  [signal] — a per-app ANCS notification
+
 Designed to be simple/synchronous. PushMessage typically completes in
 <2s on iOS 26.5 over the existing daemon session.
 """
@@ -44,6 +49,7 @@ BUS_NAME = "com.gabriel.iphonebridge"
 OBJECT_PATH = "/com/gabriel/iphonebridge"
 IFACE = "com.gabriel.iphonebridge.Messages1"
 CALLS_IFACE = "com.gabriel.iphonebridge.Calls1"
+EVENTS_IFACE = "com.gabriel.iphonebridge.Events1"
 
 
 def _variant_dict(d: dict) -> dbus.Dictionary:
@@ -213,6 +219,38 @@ class MessagesService(dbus.service.Object):
             self.CallStateChanged(_variant_dict(event.to_dict()))
         except Exception:
             log.exception("CallStateChanged emit failed")
+
+    # ---- Events1 (live event feed for separate UIs) ---------------------
+
+    @dbus.service.signal(EVENTS_IFACE, signature="a{sv}")
+    def MessageReceived(self, props):
+        """Emitted when a new SMS/iMessage arrives. Payload: SmsEvent.to_dict()."""
+
+    @dbus.service.signal(EVENTS_IFACE, signature="a{sv}")
+    def MessageSeen(self, props):
+        """Emitted on a message read-state change. Payload: SmsEvent.to_dict()."""
+
+    @dbus.service.signal(EVENTS_IFACE, signature="a{sv}")
+    def AncsNotification(self, props):
+        """Emitted on a per-app ANCS notification. Payload: AncsEvent.to_dict()."""
+
+    def emit_message(self, event) -> None:
+        """Daemon-side helper — push an SmsEvent out as a D-Bus signal."""
+        try:
+            payload = _variant_dict(event.to_dict())
+            if getattr(event, "kind", "") == "sms_seen":
+                self.MessageSeen(payload)
+            else:
+                self.MessageReceived(payload)
+        except Exception:
+            log.exception("message signal emit failed")
+
+    def emit_ancs(self, event) -> None:
+        """Daemon-side helper — push an AncsEvent out as an AncsNotification signal."""
+        try:
+            self.AncsNotification(_variant_dict(event.to_dict()))
+        except Exception:
+            log.exception("AncsNotification emit failed")
 
 
 def claim_bus_name() -> dbus.service.BusName:

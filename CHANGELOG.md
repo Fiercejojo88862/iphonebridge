@@ -24,6 +24,23 @@ against iPhone 16 Pro Max running iOS 26.5.
 - No group iMessage / MMS / RCS (MAP is 1:1 only)
 - No outgoing call audio routing (HFP HF role — Phase 2c)
 
+## [0.4.0] — 2026-05-20
+
+### Phase 2d — GTK4 / libadwaita desktop app
+
+- **`iphonebridge-ui`** — a standalone GTK4 / libadwaita app, separate from
+  the daemon, talking to it over D-Bus. Four surfaces:
+  - **Messages** — SMS/iMessage threads with history and a compose box
+  - **Notifications** — a live feed of per-app ANCS notifications
+  - **Calls** — a dialer plus answer / hang-up controls for active calls
+  - **Setup** — daemon health, data counts, and the iPhone-toggle checklist
+- New `src/iphonebridge/ui/` package; `DaemonClient` subscribes to the
+  daemon's live signals and reads history from `events.jsonl`.
+- Daemon broadcasts a live event feed on a new D-Bus interface
+  `com.gabriel.iphonebridge.Events1` (`MessageReceived`, `MessageSeen`,
+  `AncsNotification` signals) for the UI to consume.
+- `data/` — `.desktop` entry, AppStream metainfo, and an app icon.
+
 ## [0.3.0] — 2026-05-20
 
 ### Phase 2c — HFP Hands-Free calls
