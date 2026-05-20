@@ -161,6 +161,17 @@ def sms_list(
         typer.echo(f"{ts_styled}  {sender_styled}  {body}")
 
 
+@app.command("pair-setup")
+def pair_setup(
+    no_restart: bool = typer.Option(False, "--no-restart",
+                                     help="Don't restart the daemon at the end"),
+):
+    """First-run wizard: pick a paired iPhone, write the local config,
+    walk through the iPhone-side toggle steps."""
+    from iphonebridge.pair_setup import run_wizard
+    raise typer.Exit(code=run_wizard(restart_after=not no_restart))
+
+
 @app.command("sms-send")
 def sms_send(
     recipient: str = typer.Argument(..., help="Recipient phone number, e.g. +15551234567"),

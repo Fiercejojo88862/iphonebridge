@@ -71,29 +71,26 @@ iphonebridge doctor
 sudo bash systemd/install-cod-sudoers.sh
 
 # 6. Pair the iPhone with this machine via the normal GNOME Bluetooth panel
-#    or `bluetoothctl pair <MAC>`. Note the MAC of the iPhone — you'll
-#    need it in step 8.
+#    or `bluetoothctl pair <MAC>` (then `trust <MAC>`).
 
-# 7. (One-time) On the iPhone, in Settings → Bluetooth → tap (i) next to
-#    your computer's name, enable BOTH of:
-#      • Show Message Notifications     (gates MAP / SMS)
-#      • Sync Contacts                  (gates PBAP / contacts)
-#    These toggles only surface after step 5 is done and the daemon has
-#    been started once. They are PER-DEVICE and PER-PROFILE.
-
-# 8. Set the target iPhone MAC. The default in src/iphonebridge/config.py
-#    is the placeholder `AA:BB:CC:DD:EE:FF`. Put YOUR iPhone's MAC into a
-#    local env file the systemd unit will source:
-mkdir -p ~/.config/iphonebridge
-echo "IPHONEBRIDGE_MAC=AA:BB:CC:DD:EE:FF" > ~/.config/iphonebridge/local.env
-#    (replace AA:BB:... with your iPhone's actual BT MAC — find it via
-#    bluetoothctl devices Paired after step 6).
-
-# 9. Install + start the daemon as a systemd user service
+# 7. Install the systemd user service
 mkdir -p ~/.config/systemd/user
 cp systemd/iphonebridge.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now iphonebridge
+
+# 8. Run the pair-setup wizard. It enumerates paired Bluetooth devices,
+#    picks your iPhone, writes ~/.config/iphonebridge/local.env, and
+#    prints the iPhone-side toggle steps you still need to do.
+iphonebridge pair-setup
+
+# 9. On the iPhone (the wizard reminds you):
+#    Settings → Bluetooth → tap (i) next to this computer's name
+#      • Show Message Notifications: ON   (gates MAP / SMS + iMessage)
+#      • Sync Contacts: ON                (gates PBAP / contacts)
+#    These toggles only surface after the daemon has started once with
+#    the right CoD + BLE advert active. Re-run pair-setup or restart the
+#    daemon if you don't see them on the first try.
 
 # 10. Test
 journalctl --user -u iphonebridge -f
