@@ -209,6 +209,7 @@ class _PendingFetch:
             is_read=str(parsed.status or "").upper() == "READ",
             raw_status=str(self.initial_props.get("Status") or "") or None,
             raw_type=parsed.type or str(self.initial_props.get("Type") or "") or None,
+            message_path=self.message_path,
         )
         log.info("sms_received from %s: %r",
                  event.display_sender, (event.body or "")[:80])
@@ -230,6 +231,7 @@ class _PendingFetch:
             is_read=False,
             raw_status=str(self.initial_props.get("Status") or "") or None,
             raw_type=str(self.initial_props.get("Type") or "") or None,
+            message_path=self.message_path,
         )
         try:
             self.listener.on_sms(event)

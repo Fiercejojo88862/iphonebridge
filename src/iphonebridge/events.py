@@ -62,6 +62,9 @@ class SmsEvent:
     is_read: bool
     raw_status: str | None
     raw_type: str | None
+    # Full BlueZ obex DBus path to the Message1 object, so downstream
+    # code (e.g. libnotify sink) can write back read-state.
+    message_path: str | None = None
     seen_at: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
