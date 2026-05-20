@@ -31,7 +31,9 @@ Park ideas here so they don't derail Phase 1.
 ## Phase 3 / nice-to-have
 - [ ] Encrypted SQLite for message cache
 - [ ] Multi-device support (currently hard-coded to one iPhone MAC)
-- [ ] Flatpak packaging
+- [~] Flatpak packaging — draft manifest for the UI in `packaging/flatpak/`
+  (UI-only; daemon stays native). Needs a build pass; see its README for the
+  one open issue (port `ui/client.py` to GDBus to drop the dbus-python module).
 - [ ] iOS version regression test matrix
 - [ ] DBus service `com.gabriel.IPhoneBridge` so other UIs can subscribe to events
 

@@ -267,7 +267,7 @@ These are Apple's Bluetooth-stack limits, not bugs:
 
 ## 🗺️ Roadmap
 
-- Flatpak packaging.
+- **Flatpak** for the UI — a draft manifest lives in [`packaging/flatpak/`](packaging/flatpak/); it still needs a build pass.
 
 See [`BACKLOG.md`](BACKLOG.md).
 
