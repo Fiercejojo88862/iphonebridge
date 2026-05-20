@@ -24,6 +24,19 @@ against iPhone 16 Pro Max running iOS 26.5.
 - No group iMessage / MMS / RCS (MAP is 1:1 only)
 - No outgoing call audio routing (HFP HF role — Phase 2c)
 
+## [0.4.2] — 2026-05-20
+
+### Verification codes auto-copied to the clipboard
+
+- When an incoming text carries a one-time / 2FA code, the daemon detects it
+  and copies it straight to the system clipboard, with a short "Code copied"
+  notification — paste with Ctrl+V, no reaching for the phone. New
+  `ClipboardSink`.
+- Detection requires a verification keyword *and* a 4-8 digit number, so an
+  ordinary text that just happens to contain a number doesn't trigger.
+- Uses `wl-copy` (Wayland) or `xclip` / `xsel` (X11) — install `wl-clipboard`
+  for the Wayland path.
+
 ## [0.4.1] — 2026-05-20
 
 ### Sent messages in conversation history

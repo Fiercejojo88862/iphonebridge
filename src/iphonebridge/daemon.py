@@ -36,6 +36,7 @@ from iphonebridge.hfp.ofono_client import HfpManager
 from iphonebridge.obex.map_events import MapEventListener
 from iphonebridge.obex.sessions import SessionError, SessionManager
 from iphonebridge.sinks import Sink
+from iphonebridge.sinks.clipboard import ClipboardSink
 from iphonebridge.sinks.jsonl import JsonlSink
 from iphonebridge.sinks.libnotify import LibnotifySink
 
@@ -179,6 +180,10 @@ class Daemon:
             self.sinks.append(LibnotifySink(hfp=self.hfp))
         except Exception:
             log.exception("libnotify sink failed to init — continuing")
+        try:
+            self.sinks.append(ClipboardSink())
+        except Exception:
+            log.exception("clipboard sink failed to init — continuing")
         log.info("sinks ready: %s", [s.name for s in self.sinks])
 
     def _post_sessions_setup(self) -> None:

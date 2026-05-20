@@ -2,7 +2,7 @@
 
 # 📱 iphonebridge
 
-**Your iPhone's messages, notifications, and contacts — on your Linux desktop, over Bluetooth.**
+**Your iPhone's messages, calls, notifications, and contacts — on your Linux desktop, over Bluetooth.**
 
 [![CI](https://github.com/gabrielmeir53/iphonebridge/actions/workflows/ci.yml/badge.svg)](https://github.com/gabrielmeir53/iphonebridge/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/gabrielmeir53/iphonebridge?color=brightgreen)](https://github.com/gabrielmeir53/iphonebridge/releases)
@@ -18,19 +18,20 @@
 
 Microsoft's **Phone Link** gives Windows users their iPhone's texts and notifications on the desktop. There has never been a Linux equivalent — KDE Connect needs the Android/iOS *app* and only does Wi-Fi, `ancs4linux` does notifications only, Mac-relay bridges (BlueBubbles, AirMessage) need an actual Mac, and Beeper costs money.
 
-**iphonebridge is that missing piece.** It's a small Python daemon that talks to a paired iPhone over standard Bluetooth profiles (MAP, PBAP, ANCS) and surfaces everything as native GNOME desktop notifications and a CLI.
+**iphonebridge is that missing piece.** It's a small Python daemon that talks to a paired iPhone over standard Bluetooth profiles (MAP, PBAP, ANCS, HFP) and surfaces everything as native desktop notifications, a CLI, and a GTK4 desktop app.
 
 ## ✨ What it does
 
 | Feature | How | Status |
 |---|---|---|
 | 📨 **Incoming SMS + iMessage** as desktop notifications | MAP MNS push | ✅ |
-| 📤 **Send SMS + iMessage** from the CLI | MAP `PushMessage` | ✅ |
+| 📤 **Send SMS + iMessage** from the CLI or app | MAP `PushMessage` | ✅ |
+| 📋 **Verification codes auto-copied** to the clipboard | OTP detection | ✅ |
 | 👤 **Contact-name resolution** (1000s of contacts) | PBAP → SQLite cache | ✅ |
 | 🔔 **Every app's notifications** — Slack, WhatsApp, Mail… | ANCS over BLE | ✅ |
 | 📞 **Take & place phone calls** — caller ID, answer/decline, dial | HFP via oFono | ✅ |
 | 🔁 **Read-state sync** — read on either device, syncs to both | MAP read-state writes | ✅ |
-| 📜 **Message history** from the terminal | `iphonebridge sms-list` | ✅ |
+| 📜 **Message history** — incoming + your desktop replies | `sms-list` / the app | ✅ |
 | 🖥️ **Desktop app** — conversations, notification feed, call UI | GTK4 / libadwaita | ✅ |
 | ⚙️ Runs unattended as a **systemd user service** | — | ✅ |
 
@@ -50,7 +51,7 @@ As far as we know, **iphonebridge is the first free, open-source, Mac-free iMess
 | **Bluetooth adapter** | Intel chipset (for ANCS) | Intel AX-series |
 | **Python** | 3.10+ | 3.12 |
 | **iPhone** | iOS 16.5+ | iPhone 16 Pro Max, iOS 26.5 |
-| **System packages** | `bluez`, `bluez-obexd`, `python3-dbus`, `python3-gi` (+ `ofono` for calls) | — |
+| **System packages** | `bluez`, `bluez-obexd`, `python3-dbus`, `python3-gi` (+ `ofono` for calls, `wl-clipboard` for code auto-copy) | — |
 
 > ⚠️ **Adapter chipset matters for ANCS.** Per-app notifications need a real BLE bond with the iPhone. Intel adapters do this reliably. **Realtek adapters and every USB Bluetooth dongle tested so far do *not*** — their firmware negotiates legacy keys that block the cross-transport key derivation iOS needs. SMS/iMessage/contacts (MAP/PBAP) work on any adapter; only ANCS is picky. See [bmh129/ancs4linux's hardware notes](https://github.com/bmh129/ancs4linux).
 
@@ -62,6 +63,8 @@ As far as we know, **iphonebridge is the first free, open-source, Mac-free iMess
 sudo apt install bluez bluez-obexd python3-dbus python3-gi python3-venv
 # For the desktop app (iphonebridge-ui):
 sudo apt install gir1.2-gtk-4.0 gir1.2-adw-1
+# For auto-copying verification codes (Wayland):
+sudo apt install wl-clipboard
 ```
 
 ### 2 · Clone & install
@@ -198,31 +201,33 @@ iphonebridge-ui
 
 Incoming messages appear as **persistent GNOME notifications** — they stay until you either dismiss them on the desktop *or* read the message on your iPhone. Read-state syncs both ways.
 
+When a text carries a **one-time / 2FA code**, iphonebridge detects it and copies it straight to your clipboard — just press <kbd>Ctrl</kbd>+<kbd>V</kbd>, no reaching for the phone. Detection needs both a verification keyword and a 4–8 digit number, so ordinary texts don't trigger it.
+
 ## 🏗️ How it works
 
 ```
-            iPhone  (paired: BR/EDR + BLE)
-   ┌───────────┬────────────┬─────────────┐
-   │ MAP       │ PBAP       │ ANCS        │
-   │ (OBEX)    │ (OBEX)     │ (BLE GATT)  │
-   ▼           ▼            ▼
- messages    contacts    per-app notifs
-   └───────────┴────────────┴─────────────┘
-                    │
-          iphonebridge daemon
-        (Python · GLib · D-Bus)
-                    │
-        ┌───────────┼───────────┐
-        ▼           ▼           ▼
-   libnotify    JSONL log   D-Bus API
-   (desktop)    (history)   (CLI: sms-send…)
+              iPhone  (paired: BR/EDR + BLE)
+   ┌──────────┬──────────┬───────────┬──────────┐
+   │ MAP      │ PBAP     │ ANCS      │ HFP      │
+   │ (OBEX)   │ (OBEX)   │ (BLE GATT)│ (oFono)  │
+   ▼          ▼          ▼           ▼
+ messages   contacts   app notifs   calls
+   └──────────┴──────────┴───────────┴──────────┘
+                     │
+           iphonebridge daemon
+         (Python · GLib · D-Bus)
+                     │
+        ┌────────────┼────────────┐
+        ▼            ▼            ▼
+  notifications   JSONL log   D-Bus service
+  + clipboard     (history)   (CLI · GTK app)
 ```
 
 - **MAP** (Message Access Profile) — read SMS/iMessage, get real-time push of new ones, and send.
 - **PBAP** (Phone Book Access Profile) — pull the iPhone's contacts so messages show names, not numbers.
 - **ANCS** (Apple Notification Center Service) — every app's notifications, over a BLE GATT link.
 - **HFP** (Hands-Free Profile) — take and place calls; oFono speaks the HFP protocol, PipeWire's oFono backend carries the call audio to the laptop's mic/speakers.
-- One daemon, pluggable **sinks** (desktop popups, append-only JSONL log), and a **D-Bus service** so the CLI can send messages and control calls through the daemon's live session.
+- One daemon, pluggable **sinks** (desktop popups, verification-code clipboard copy, append-only JSONL log), and a **D-Bus service** so the CLI and the GTK app can send messages, control calls, and subscribe to a live event feed.
 
 Design rationale and the empirical Bluetooth findings that shaped it are in [`spike/RESULTS.md`](spike/RESULTS.md).
 
@@ -262,6 +267,7 @@ These are Apple's Bluetooth-stack limits, not bugs:
 
 - No iMessage **attachments, reactions, read receipts, or typing indicators** (MAP doesn't carry them).
 - No **group iMessage / MMS / RCS** — MAP is 1-to-1 only.
+- **Messages composed on the iPhone itself don't sync** — iOS exposes only your *inbox* over MAP, never the sent folder. Replies you send *from* iphonebridge are recorded into conversation history; texts you type on the phone aren't visible to any Bluetooth bridge.
 - HFP calls are **1-to-1 voice only** — no conference calls, no FaceTime (HFP carries neither).
 - Notification *bodies* are subject to the iPhone's "Show Previews" setting.
 
