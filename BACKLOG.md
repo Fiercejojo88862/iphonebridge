@@ -17,7 +17,7 @@ Park ideas here so they don't derail Phase 1.
 - [ ] **First-run pair-setup wizard** — guide new users through CoD sudoers install + iPhone-side toggles.
 - [ ] **Notification dismissal sync** — dismissing a libnotify popup → mark MAP `Message1.Status = "read"` on the iPhone.
 - [ ] **`iphonebridge sms list` from MAP, not just JSONL** — pull recent inbox on demand via the live MAP session.
-- [ ] **ANCS** for per-app notifications (Slack/WhatsApp/etc.) — deprioritized since iMessage already comes through. Path forward is a second BT adapter (~$10 USB dongle). Phase 0 confirmed iOS combines BR/EDR+BLE on same MAC into a single BR/EDR bond.
+- [ ] **ANCS** for per-app notifications (Slack/WhatsApp/etc.) — deprioritized since iMessage already comes through. **Update 2026-05-20:** The fork [bmh129/ancs4linux](https://github.com/bmh129/ancs4linux) is actively developing fixes for the exact BR/EDR-vs-BLE coexistence issue our Phase 0 found. Key commit `0db80f3` fixes `_trigger_gatt_discovery` to probe ANCS UUIDs in the DBus tree instead of trusting `ServicesResolved`, plus uses `LastUsedBearer=le` to bias toward BLE reconnects. **No USB BT dongle needed** — bmh129 explicitly documents that no tested USB adapter works with ANCS on Linux (Realtek firmware uses P-192 keys, blocking CTKD). Our Intel-chipset adapter is the recommended hardware. Phase 2a path: vendor or port their fix into iphonebridge.
 - [ ] **HFP HF role** — needs WirePlumber 1.5 config investigation; possibly oFono backend.
 - [ ] GTK4 / libadwaita tray + conversation window
 
