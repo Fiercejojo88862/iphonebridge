@@ -165,43 +165,64 @@ Lets the daemon set the adapter's Class-of-Device on every start without a passw
 
 </details>
 
-## 💻 Usage
+## 🖥️ Desktop app
+
+`iphonebridge-ui` is a GTK4 / libadwaita app — a separate process from the daemon, talking to it over D-Bus, so you can open and close it freely while the daemon keeps running in the background. Four tabs:
+
+- **Messages** — SMS & iMessage conversations grouped by contact. Read history and reply from a compose box; the replies you send are saved into the thread.
+- **Notifications** — a live feed of every app's notifications (Slack, Mail, WhatsApp…), mirrored from the iPhone over ANCS.
+- **Calls** — a dialer to place calls, plus Answer / Hang-up controls for active ones; an incoming call raises this tab automatically.
+- **Setup** — daemon health, contact and message counts, and the iPhone-toggle checklist.
 
 ```bash
-# Watch the daemon live
-journalctl --user -u iphonebridge -f
+iphonebridge-ui
+```
 
-# Recent messages (live from the iPhone)
+## 💻 CLI
+
+The `iphonebridge` command does everything the app does, plus setup and diagnostics:
+
+| Command | What it does |
+|---|---|
+| `iphonebridge run` | Run the daemon in the foreground (the systemd service uses this) |
+| `iphonebridge doctor` | Check prerequisites — config, adapter class, obexd, state dir |
+| `iphonebridge pair-setup` | First-run wizard — find the paired iPhone, write config |
+| `iphonebridge sms-list` | Recent messages — `-n N`, `--from <contact>`, `--source iphone\|local` |
+| `iphonebridge sms-send <to> <body>` | Send an SMS / iMessage (`<to>` = number or contact name) |
+| `iphonebridge call <to>` | Place a phone call over HFP |
+| `iphonebridge calls` | List active calls |
+| `iphonebridge hangup` | Hang up the active call(s) |
+| `iphonebridge contacts-sync` | Force a contacts refresh (otherwise automatic every 24 h) |
+| `iphonebridge ancs-enable` | One-time setup for per-app notifications (ANCS) |
+| `iphonebridge hfp-enable` | One-time setup for phone calls (HFP) |
+| `iphonebridge version` | Print the version |
+
+```bash
+# Recent messages — live from the iPhone, or from the daemon's own log
 iphonebridge sms-list -n 20
-iphonebridge sms-list --from Maddie          # one conversation
-iphonebridge sms-list --source local         # from the daemon's own log
+iphonebridge sms-list --from Maddie
+iphonebridge sms-list --source local
 
 # Send — recipient can be a phone number OR a contact name
 iphonebridge sms-send "+15551234567" "on my way"
 iphonebridge sms-send Maddie "running late"
 
-# Place / manage calls — needs HFP set up (install step 7)
-iphonebridge call Maddie               # call by contact name
-iphonebridge call "+15551234567"       # …or by number
-iphonebridge calls                     # list active calls
-iphonebridge hangup                    # end the call
+# Calls — needs HFP set up (install step 7)
+iphonebridge call Maddie
+iphonebridge calls
+iphonebridge hangup
 
-# Health check
-iphonebridge doctor
-
-# Force a contacts refresh (otherwise automatic every 24h)
-iphonebridge contacts-sync
-
-# Service control
+# Watch the daemon live · control the service
+journalctl --user -u iphonebridge -f
 systemctl --user {start,stop,restart} iphonebridge
-
-# Graphical app — conversations, notification feed, call UI, setup
-iphonebridge-ui
 ```
 
-Incoming messages appear as **persistent GNOME notifications** — they stay until you either dismiss them on the desktop *or* read the message on your iPhone. Read-state syncs both ways.
+## 🔔 How it behaves
 
-When a text carries a **one-time / 2FA code**, iphonebridge detects it and copies it straight to your clipboard — just press <kbd>Ctrl</kbd>+<kbd>V</kbd>, no reaching for the phone. Detection needs both a verification keyword and a 4–8 digit number, so ordinary texts don't trigger it.
+- **Incoming messages** appear as **persistent notifications** — they stay until you dismiss them on the desktop *or* read the message on your iPhone. **Read-state syncs both ways.**
+- **Verification codes** — when a text carries a one-time / 2FA code, iphonebridge detects it and copies it to your clipboard automatically; press <kbd>Ctrl</kbd>+<kbd>V</kbd> to paste. Detection needs both a verification keyword and a 4–8 digit number, so ordinary texts don't trigger it.
+- **Incoming calls** raise a notification with **Answer / Decline** buttons that act on the call directly.
+- **Sent messages** — replies you send from the desktop are recorded into conversation history, so a thread shows both sides.
 
 ## 🏗️ How it works
 
@@ -253,6 +274,18 @@ An iPhone toggle is off. Check **Settings → Bluetooth → ⓘ → Show Message
 <summary><b>ANCS notifications never arrive</b></summary>
 
 ANCS needs a BLE bond, which needs a fresh pair done with the adapter correctly set up. Run `iphonebridge ancs-enable`, then forget + re-pair the iPhone. Also confirm your adapter is Intel — Realtek and USB dongles can't do it.
+</details>
+
+<details>
+<summary><b>Calls don't connect, or there's no call audio</b></summary>
+
+HFP needs oFono, and oFono must start *after* WirePlumber so it can claim the HFP profile. Run `iphonebridge hfp-enable`, then `sudo systemctl restart ofono`, reconnect the iPhone, and restart the daemon. If `journalctl -u ofono` shows `RegisterProfile … UUID already registered`, the start order is wrong — restart oFono again after WirePlumber is up.
+</details>
+
+<details>
+<summary><b>Verification codes aren't being copied</b></summary>
+
+Install a clipboard tool: `sudo apt install wl-clipboard` (Wayland) or `xclip` (X11). The daemon log shows `no clipboard tool worked` when none is present.
 </details>
 
 <details>
