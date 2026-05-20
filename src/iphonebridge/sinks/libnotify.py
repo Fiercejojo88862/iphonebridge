@@ -22,6 +22,7 @@ import logging
 import dbus
 import dbus.exceptions
 
+from iphonebridge.ancs.events import AncsEvent
 from iphonebridge.bus import session_bus
 from iphonebridge.events import SmsEvent
 
@@ -101,6 +102,34 @@ class LibnotifySink:
                 signal_name="PropertiesChanged",
                 path=event.message_path,
             )
+
+    # ---- ANCS events (per-app notifications) ----------------------------
+
+    def handle_ancs(self, event: AncsEvent) -> None:
+        # Title: "📱 AppName" or "📱 com.bundle.id" if no name yet
+        app = event.app_name or event.app_id or "Notification"
+        title = f"\U0001f4f1 {app}"
+        # Body: prefer Title field for headline, then Message
+        body_parts = [p for p in (event.title, event.body) if p]
+        body = " — ".join(body_parts) if body_parts else ""
+        if len(body) > _BODY_LIMIT:
+            body = body[:_BODY_LIMIT - 1] + "…"
+        try:
+            # ANCS notifications also persistent (timeout=0). User dismisses
+            # or we close on demand. No mark-read sync for ANCS (the iPhone
+            # doesn't expose a write-back path for app notification state).
+            self._notif.Notify(
+                _APP_NAME,
+                dbus.UInt32(0),
+                "phone-symbolic",
+                title,
+                body,
+                dbus.Array([], signature="s"),
+                dbus.Dictionary({"urgency": dbus.Byte(1)}, signature="sv"),
+                dbus.Int32(0),
+            )
+        except dbus.exceptions.DBusException as e:
+            log.error("libnotify Notify (ANCS) failed: %s", e.get_dbus_name())
 
     # ---- iPhone marks read → close our popup ----------------------------
 

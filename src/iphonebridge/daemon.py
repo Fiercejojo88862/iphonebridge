@@ -25,6 +25,8 @@ import signal
 from gi.repository import GLib
 
 from iphonebridge import bluez_setup, config
+from iphonebridge.ancs.client import AncsClient
+from iphonebridge.ancs.events import AncsEvent
 from iphonebridge.bus import main_loop
 from iphonebridge.contacts import ContactsResolver, pull_phonebook
 from iphonebridge.dbus_service import MessagesService, claim_bus_name
@@ -51,6 +53,7 @@ class Daemon:
         self.contacts = ContactsResolver()
         self.sinks: list[Sink] = []
         self.listener: MapEventListener | None = None
+        self.ancs: AncsClient | None = None
         self._contacts_refresh_id: int | None = None
         self._session_retry_id: int | None = None
         self._bus_name = None
@@ -72,6 +75,18 @@ class Daemon:
 
         # Try to open MAP/PBAP. If blocked, stay alive and retry every minute.
         self._try_open_sessions(first_attempt=True)
+
+        # ANCS — per-app notifications via BLE GATT. Independent of MAP/PBAP;
+        # may or may not work depending on whether BlueZ has established a
+        # BLE link to the iPhone (we don't yet do the LastUsedBearer=le
+        # dance). Either way, the client just waits patiently for the three
+        # ANCS characteristics to appear and subscribes when they do.
+        device_path = (
+            f"/org/bluez/{config.ADAPTER}"
+            f"/dev_{config.IPHONE_MAC.replace(':', '_')}"
+        )
+        self.ancs = AncsClient(device_path, on_event=self._fanout_ancs)
+        self.ancs.start()
 
         # Always set up the DBus service so a CLI can at least query
         # IsHealthy and learn the daemon's status. Send() will fail until
@@ -205,6 +220,8 @@ class Daemon:
                 setattr(self, tid_attr, None)
         if self.listener is not None:
             self.listener.stop()
+        if self.ancs is not None:
+            self.ancs.stop()
         self.sessions.close_all()
         bluez_setup.unregister_advert()
         main_loop.quit()
@@ -225,6 +242,17 @@ class Daemon:
             except Exception:
                 log.exception("sink %s failed on event %s",
                               sink.name, event.handle)
+
+    def _fanout_ancs(self, event: AncsEvent) -> None:
+        for sink in self.sinks:
+            try:
+                handler = getattr(sink, "handle_ancs", None)
+                if handler is None:
+                    continue  # sink doesn't know about ANCS events
+                handler(event)
+            except Exception:
+                log.exception("sink %s failed on ANCS event %d",
+                              sink.name, event.notification_id)
 
     def _signal(self, signum, _frame):
         log.info("received signal %d, stopping", signum)

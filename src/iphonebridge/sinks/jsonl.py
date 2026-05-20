@@ -25,8 +25,15 @@ class JsonlSink:
         log.info("jsonl sink → %s", self.path)
 
     def handle(self, event: SmsEvent) -> None:
+        self._append(event.to_dict())
+
+    def handle_ancs(self, event) -> None:
+        """Same JSONL, kind: 'ancs_notification' instead of 'sms_received'."""
+        self._append(event.to_dict())
+
+    def _append(self, payload: dict) -> None:
         try:
             with self.path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(event.to_dict(), ensure_ascii=False) + "\n")
+                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
         except OSError as e:
             log.error("jsonl write failed: %s", e)
