@@ -28,7 +28,7 @@ Whether this is a recent Apple change, a long-standing-but-undocumented exposure
 ### What it explicitly does *not* do
 
 Limits that come from Apple's Bluetooth stack and which are unlikely to change:
-- **No per-app notification mirroring yet.** ANCS — the every-app notification source (Slack, WhatsApp, Mail, etc.) — is deferred to a future Phase. iOS pairs ANCS over BLE and combines BLE+BR/EDR into a single BR/EDR bond when offered both modes; ANCS therefore needs a second BT adapter. Now that iMessage works over MAP, the urgency has dropped considerably.
+- ~~No per-app notification mirroring~~ **ANCS works as of v0.2.0** — every iOS app's notifications (Slack, WhatsApp, Mail, etc.) mirror to the desktop in real time. The unlock is a fresh BLE-aware pairing: `iphonebridge ancs-enable` writes `LastUsedBearer=le` into BlueZ's pairing record + a forget/re-pair on the iPhone produces a proper BLE bond via CTKD. Requires an Intel BT adapter — per [bmh129/ancs4linux](https://github.com/bmh129/ancs4linux)'s hardware compatibility notes, Realtek dongles and most USB BT adapters don't do BLE properly with iOS.
 - **No outgoing call audio routing.** HFP Hands-Free role on Linux is a separate config rabbit hole (WirePlumber 1.5 + possibly oFono); deferred.
 - **No group iMessage / MMS / RCS.** iPhone's MAP exposes 1:1 threads only.
 - **No read receipts, typing indicators, message reactions, or full attachments.** Just text + sender + timestamp. Plenty for a notification mirror.
@@ -250,9 +250,17 @@ ruff check src/
 
 The Phase 0 spike scripts under `spike/` are the easiest way to test individual Bluetooth profile behavior in isolation. They're throwaway-quality but well-commented.
 
+## Credits
+
+This project stands on top of two excellent prior efforts:
+
+- **[bmh129/ancs4linux](https://github.com/bmh129/ancs4linux)** — an actively-maintained 2026 fork of pzmarzly's original. Its empirical write-ups on BR/EDR-vs-BLE coexistence on iOS 18+, the `LastUsedBearer=le` unlock, and the hardware-compatibility matrix (Intel-only, no USB BT adapters) are what made iphonebridge's v0.2.0 ANCS support possible. The ANCS wire-format constants and parser logic in `src/iphonebridge/ancs/{constants,parsers}.py` are derived from their `observer/ancs/` modules.
+- **[pzmarzly/ancs4linux](https://github.com/pzmarzly/ancs4linux)** — the established 2022 baseline implementation. Last commit May 2022, but its four-daemon DBus architecture and ANCS observer patterns established the reference implementation everything later forks (including this one) work from.
+
+Both are GPL-2.0-or-later, hence iphonebridge's licensing.
+
 ## Related projects
 
-- [`pzmarzly/ancs4linux`](https://github.com/pzmarzly/ancs4linux) — the established ANCS-over-BLE implementation. Notifications-only, last commit May 2022. Patterns we plan to port for Phase 2a.
 - [Microsoft Phone Link](https://learn.microsoft.com/en-us/windows/whats-new/whats-new-in-windows-11) — the Windows equivalent. Uses MAP/PBAP/HFP too but with polished UX backed by a full Windows team.
 - [BlueBubbles](https://bluebubbles.app/) / [AirMessage](https://airmessage.org/) — Mac-relay-based iMessage on Linux. Different problem (requires a Mac), different protocol path.
 - [Beeper](https://www.beeper.com/) — paid commercial iMessage bridge.
