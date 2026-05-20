@@ -114,6 +114,8 @@ def sms_list(
     folder: str = typer.Option("telecom/msg/INBOX", "--folder",
                                help="MAP folder when --source=iphone "
                                     "(e.g. telecom/msg/INBOX or telecom/msg/sent)"),
+    from_contact: str = typer.Option(None, "--from",
+                                     help="Only show messages from this contact name or phone"),
 ):
     """Show recent SMS / iMessage history.
 
@@ -125,6 +127,53 @@ def sms_list(
     """
     import json
     from datetime import datetime
+
+    from iphonebridge.events import normalize_phone
+
+    # ---- build a from-filter predicate from --from ----------------------
+    # Two layers:
+    #   • filter_phone_norms — for events that have a phone digit string
+    #   • from_text_lower    — for events where MAP returned only the
+    #                          contact's FN as sender (no phone)
+    filter_phone_norms: set[str] = set()
+    from_text_lower: str | None = None
+
+    if from_contact:
+        if _RECIPIENT_LOOKS_LIKE_PHONE.match(from_contact):
+            norm = normalize_phone(from_contact) or ""
+            filter_phone_norms = {norm, norm[-10:]} if len(norm) >= 10 else {norm}
+        else:
+            from iphonebridge.contacts import ContactsResolver
+            matches = ContactsResolver().find_by_name(from_contact)
+            if not matches:
+                typer.echo(typer.style(
+                    f"No contact matched {from_contact!r}.",
+                    fg=typer.colors.YELLOW))
+                raise typer.Exit(code=1)
+            for _, phone in matches:
+                filter_phone_norms.add(phone)
+                if len(phone) >= 10:
+                    filter_phone_norms.add(phone[-10:])
+            from_text_lower = from_contact.lower()
+
+    def passes_from_filter(e: dict) -> bool:
+        if not filter_phone_norms and not from_text_lower:
+            return True
+        # Phone match (for entries with real phone digits)
+        sp = (e.get("sender_phone_norm") or "")
+        if sp:
+            sp_tail = sp[-10:] if len(sp) >= 10 else sp
+            if sp in filter_phone_norms or sp_tail in filter_phone_norms:
+                return True
+        # Substring match against raw sender (for FN-only entries)
+        if from_text_lower:
+            raw = (e.get("sender") or e.get("sender_phone") or "").lower()
+            if from_text_lower in raw:
+                return True
+        return False
+
+    # ---- when filtering, pull a wider net from MAP ----------------------
+    fetch_n = max(n * 10, 100) if (filter_phone_norms or from_text_lower) else n
 
     # ---- helper to render a record ---------------------------------------
     def render(sender: str, body: str, ts_str: str, *, read: bool = True) -> None:
@@ -156,7 +205,7 @@ def sms_list(
             source = "local"
         else:
             try:
-                raw = str(iface.ListRecent(folder, dbus.UInt32(n), timeout=30))
+                raw = str(iface.ListRecent(folder, dbus.UInt32(fetch_n), timeout=30))
             except dbus.exceptions.DBusException as e:
                 typer.echo(typer.style(
                     f"Live query failed: {e.get_dbus_message() or e.get_dbus_name()}\n"
@@ -166,8 +215,22 @@ def sms_list(
                 source = "local"
             else:
                 msgs = json.loads(raw)
+                if filter_phone_norms or from_text_lower:
+                    msgs = [m for m in msgs if passes_from_filter(m)]
+                msgs = msgs[:n]
                 if not msgs:
-                    typer.echo("(no messages)")
+                    if filter_phone_norms or from_text_lower:
+                        typer.echo(typer.style(
+                            "(no recent messages from that contact in the "
+                            "iPhone's MAP inbox window)", fg=typer.colors.YELLOW))
+                        typer.echo("iOS only exposes a small slice of recent "
+                                   "messages via MAP. For older history, try:")
+                        typer.echo(typer.style(
+                            f"  iphonebridge sms-list --from {from_contact!r} "
+                            f"--source local -n {n}",
+                            fg=typer.colors.WHITE))
+                    else:
+                        typer.echo("(no messages)")
                     return
                 # Resolve contact names via local cache
                 from iphonebridge.contacts import ContactsResolver
@@ -203,6 +266,9 @@ def sms_list(
             events.append(json.loads(line))
         except json.JSONDecodeError:
             continue
+
+    if filter_phone_norms or from_text_lower:
+        events = [e for e in events if passes_from_filter(e)]
 
     events = events[-n:][::-1]
     if not events:
