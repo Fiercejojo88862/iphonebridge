@@ -12,7 +12,7 @@ Park ideas here so they don't derail Phase 1.
 
 ## Phase 2 (revised after iMessage-over-MAP discovery 2026-05-19)
 
-- [ ] **MAP send** (`Message1.PushMessage`) — **PROMOTED to top priority**. With iMessage now confirmed working on the *read* side, the question is whether the *write* side also routes as iMessage when the recipient is iMessage-capable. If yes: free open-source Linux iMessage bridge, no Mac relay needed.
+- [x] **MAP send / iMessage send** (`MessageAccess1.PushMessage`) — **CONFIRMED WORKING 2026-05-19 via spike/07_map_send.py**. iOS routes outgoing to iMessage-capable recipients as iMessage (blue bubble). iphonebridge is now read+send. NEXT: build a proper `iphonebridge sms-send <number> <body>` CLI command backed by a daemon DBus method (so we don't have to stop/restart the daemon to free the MAP session per send).
 - [ ] **Graceful toggle-disabled handling** — when iPhone toggles are off, daemon currently crash-loops via systemd. Should log + back off + wait, not die.
 - [ ] **First-run pair-setup wizard** — guide new users through CoD sudoers install + iPhone-side toggles.
 - [ ] **Notification dismissal sync** — dismissing a libnotify popup → mark MAP `Message1.Status = "read"` on the iPhone.

@@ -38,6 +38,17 @@ def doctor(verbose: bool = typer.Option(False, "-v", "--verbose")):
 
     ok = True
 
+    # IPHONEBRIDGE_MAC configured?
+    if config.IPHONE_MAC.upper() in ("AA:BB:CC:DD:EE:FF", ""):
+        log.error("IPHONEBRIDGE_MAC not configured (still the placeholder).")
+        log.error("    Set your iPhone's Bluetooth MAC via env var, e.g.:")
+        log.error("    export IPHONEBRIDGE_MAC=AA:BB:CC:DD:EE:FF")
+        log.error("    Or persist it in ~/.config/iphonebridge/local.env")
+        log.error("    (see README — 'Setup'). The systemd unit picks it up.")
+        ok = False
+    else:
+        log.info("Target MAC configured: %s", config.IPHONE_MAC)
+
     # bluez-obexd present?
     if not os.path.exists("/usr/libexec/bluetooth/obexd"):
         log.error("bluez-obexd binary not found at /usr/libexec/bluetooth/obexd")
@@ -148,6 +159,51 @@ def sms_list(
         sender_styled = typer.style(f"{sender:>20s}", fg=typer.colors.CYAN, bold=True)
         ts_styled = typer.style(ts, dim=True)
         typer.echo(f"{ts_styled}  {sender_styled}  {body}")
+
+
+@app.command("sms-send")
+def sms_send(
+    recipient: str = typer.Argument(..., help="Recipient phone number, e.g. +15551234567"),
+    body: str = typer.Argument(..., help="Message body"),
+    verbose: bool = typer.Option(False, "-v", "--verbose"),
+):
+    """Send an SMS or iMessage via the running daemon's MAP session.
+
+    The iPhone automatically routes to iMessage when the recipient is
+    iMessage-capable (blue bubble). Otherwise falls back to SMS.
+
+    Requires the daemon to be running (systemctl --user start iphonebridge).
+    """
+    _setup_logging(verbose)
+    import dbus
+    import dbus.mainloop.glib
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+    bus = dbus.SessionBus()
+    try:
+        proxy = bus.get_object("com.gabriel.iphonebridge",
+                               "/com/gabriel/iphonebridge")
+        iface = dbus.Interface(proxy, "com.gabriel.iphonebridge.Messages1")
+    except dbus.exceptions.DBusException as e:
+        typer.echo(typer.style(
+            f"Couldn't reach iphonebridge daemon on DBus: {e.get_dbus_message()}",
+            fg=typer.colors.RED,
+        ))
+        typer.echo("Start it with: systemctl --user start iphonebridge")
+        raise typer.Exit(code=2)
+
+    try:
+        transfer = str(iface.Send(recipient, body, timeout=45))
+    except dbus.exceptions.DBusException as e:
+        typer.echo(typer.style(
+            f"Send failed: {e.get_dbus_name()}\n  {e.get_dbus_message()}",
+            fg=typer.colors.RED,
+        ))
+        raise typer.Exit(code=3)
+
+    typer.echo(typer.style(
+        f"Sent. Transfer: {transfer}",
+        fg=typer.colors.GREEN,
+    ))
 
 
 @app.command()

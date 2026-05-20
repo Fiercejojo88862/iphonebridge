@@ -87,7 +87,7 @@ the user confirmed: blue bubble, iMessage thread, sender on iPhone with iMessage
 
 - **The "iMessage requires a Mac relay" assumption was wrong, at least for read on iOS 26.5.** iphonebridge already mirrors iMessage in real time — same code path as SMS.
 - **`Type: sms-gsm` is a misleading label** — iOS uses it for ALL incoming messages over MAP regardless of underlying transport. Don't use it to distinguish SMS vs iMessage; you can't, from MAP alone.
-- **Open question: does outgoing via MAP `PushMessage` route as iMessage** when the recipient is iMessage-capable, or is it always SMS? This is the next big test (Phase 2b).
+- **Outgoing iMessage via MAP `PushMessage` ALSO works** (DISCOVERED 2026-05-19, same session). `spike/07_map_send.py` constructed a minimal bMessage (originator + BENV-wrapped recipient VCARD, TYPE=SMS_GSM, FOLDER=telecom/msg/outbox), called `MessageAccess1.PushMessage` with `folder="telecom/msg/outbox"` and empty filter args. Transfer completed (`status: gone`). On the iPhone the outgoing bubble appeared in the recipient thread as **blue** — confirming iOS routed it as iMessage. iphonebridge is now potentially the first free open-source Linux iMessage bridge (read + send) that does not require a Mac relay.
 - **Older iOS versions probably behave differently.** This may be specific to iOS 26.x or a very recent change. Worth checking iOS 18/19 if we ever get hands on test devices.
 
 **Things still NOT exposed:** group iMessage / RCS, threading metadata, read receipts, typing indicators, full attachments. Just message text + sender + timestamp. That's still the killer feature for a daily-driver notification mirror.

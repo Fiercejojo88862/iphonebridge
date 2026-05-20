@@ -11,19 +11,22 @@ A native Linux desktop bridge for a paired iPhone over Bluetooth. SMS notificati
 - **Message history readable from the CLI.** `iphonebridge sms-list` dumps recent inbox activity from the local event log.
 - **Persistent and unattended.** Runs as a systemd user service. Auto-starts on login, restarts on failure, logs to journald.
 
-### The iMessage surprise
+### The iMessage surprise (both read AND send work)
 
 Every prior writeup of Bluetooth MAP on iOS — Apple Developer Forums, the ancs4linux project's docs, every "your iPhone won't show iMessage over Bluetooth" SO answer — says iMessage threads are invisible to MAP and you need a Mac relay (BlueBubbles / AirMessage / Beeper) to bridge them.
 
-**That's not true on iOS 26.5**, at least not on an iPhone 16 Pro Max. **iMessage flows through MAP** just like SMS, labeled identically as `Type: sms-gsm`. This project's daemon already mirrors them in real time without any special handling — same code path. See [`spike/RESULTS.md`](spike/RESULTS.md) §6 for the empirical test (sender confirmed blue-bubble iMessage thread, message arrived through our daemon with full body intact).
+**That's not true on iOS 26.5**, at least not on an iPhone 16 Pro Max:
 
-Whether this is a recent Apple change, a long-standing-but-undocumented exposure, or specific to iOS 26.x — we don't know yet. But for the daily-driver "see my iPhone messages on Linux" use case, **it works today**.
+- **Incoming iMessage flows through MAP MNS** just like SMS, labeled identically as `Type: sms-gsm`. The daemon mirrors them in real time, same code path. See [`spike/RESULTS.md`](spike/RESULTS.md) §6.
+- **Outgoing iMessage via MAP `PushMessage` ALSO works.** When we PushMessage to an iMessage-capable recipient, iOS routes it as iMessage — sender's thread shows a **blue bubble**, recipient gets iMessage delivery.
+
+Together this makes iphonebridge **potentially the first free open-source Linux iMessage bridge that doesn't require a Mac relay** — BlueBubbles, AirMessage, Beeper become unnecessary for the read+send use cases that motivate most users.
+
+Whether this is a recent Apple change, a long-standing-but-undocumented exposure, or specific to iOS 26.x is not yet known. But for the daily-driver "see and reply to my iPhone messages on Linux" use case, **it works today**.
 
 ### What it explicitly does *not* do
 
 Limits that come from Apple's Bluetooth stack and which are unlikely to change:
-
-- **No outgoing iMessage send yet** — Phase 2b will test whether MAP `PushMessage` routes as iMessage to iMessage-capable recipients (or always falls back to SMS). Until that test runs, we don't know.
 - **No per-app notification mirroring yet.** ANCS — the every-app notification source (Slack, WhatsApp, Mail, etc.) — is deferred to a future Phase. iOS pairs ANCS over BLE and combines BLE+BR/EDR into a single BR/EDR bond when offered both modes; ANCS therefore needs a second BT adapter. Now that iMessage works over MAP, the urgency has dropped considerably.
 - **No outgoing call audio routing.** HFP Hands-Free role on Linux is a separate config rabbit hole (WirePlumber 1.5 + possibly oFono); deferred.
 - **No group iMessage / MMS / RCS.** iPhone's MAP exposes 1:1 threads only.
@@ -79,8 +82,12 @@ sudo bash systemd/install-cod-sudoers.sh
 #    been started once. They are PER-DEVICE and PER-PROFILE.
 
 # 8. Set the target iPhone MAC. The default in src/iphonebridge/config.py
-#    works for the author's device. For yours, edit config.py OR export
-#    IPHONEBRIDGE_MAC=AA:BB:CC:DD:EE:FF before running the daemon.
+#    is the placeholder `AA:BB:CC:DD:EE:FF`. Put YOUR iPhone's MAC into a
+#    local env file the systemd unit will source:
+mkdir -p ~/.config/iphonebridge
+echo "IPHONEBRIDGE_MAC=AA:BB:CC:DD:EE:FF" > ~/.config/iphonebridge/local.env
+#    (replace AA:BB:... with your iPhone's actual BT MAC — find it via
+#    bluetoothctl devices Paired after step 6).
 
 # 9. Install + start the daemon as a systemd user service
 mkdir -p ~/.config/systemd/user

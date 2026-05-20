@@ -7,6 +7,10 @@ Requires=dbus.socket
 
 [Service]
 Type=simple
+# Source per-machine config (IPHONEBRIDGE_MAC etc.). Leading `-` means
+# the file is optional — the service starts even if it's missing, but
+# `iphonebridge doctor` will then warn that the MAC isn't configured.
+EnvironmentFile=-%h/.config/iphonebridge/local.env
 ExecStart=%h/code/iphonebridge/.venv/bin/iphonebridge run
 Restart=on-failure
 RestartSec=5

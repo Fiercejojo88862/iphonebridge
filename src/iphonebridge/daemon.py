@@ -21,6 +21,7 @@ from gi.repository import GLib
 from iphonebridge import bluez_setup, config
 from iphonebridge.bus import main_loop
 from iphonebridge.contacts import ContactsResolver, pull_phonebook
+from iphonebridge.dbus_service import MessagesService, claim_bus_name
 from iphonebridge.events import SmsEvent
 from iphonebridge.obex.map_events import MapEventListener
 from iphonebridge.obex.sessions import SessionManager
@@ -41,6 +42,8 @@ class Daemon:
         self.sinks: list[Sink] = []
         self.listener: MapEventListener | None = None
         self._contacts_refresh_id: int | None = None
+        self._bus_name = None
+        self._dbus_service: MessagesService | None = None
 
     # ---- lifecycle -------------------------------------------------------
 
@@ -83,6 +86,16 @@ class Daemon:
             resolve_contact=lambda raw: self.contacts.resolve(raw),
         )
         self.listener.start()
+
+        # Expose a DBus service so the CLI can request sends without
+        # tearing down the daemon's MAP session.
+        try:
+            self._bus_name = claim_bus_name()
+            self._dbus_service = MessagesService(self._bus_name, self.sessions)
+            log.info("DBus service ready: com.gabriel.iphonebridge")
+        except Exception:
+            log.exception("DBus service registration failed — continuing "
+                          "without send capability")
 
         # Signal handlers
         for sig in (signal.SIGINT, signal.SIGTERM):

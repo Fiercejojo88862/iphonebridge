@@ -11,7 +11,10 @@ from pathlib import Path
 # ---- target device ------------------------------------------------------
 
 IPHONE_MAC: str = os.environ.get("IPHONEBRIDGE_MAC", "AA:BB:CC:DD:EE:FF")
-"""BD_ADDR of the paired iPhone. Defaults to the user's iPhone 16 Pro Max."""
+"""BD_ADDR of the paired iPhone. Set IPHONEBRIDGE_MAC env var to your
+iPhone's MAC, or put it in ~/.config/iphonebridge/local.env which the
+systemd user unit will source. The default is a placeholder — `doctor`
+will refuse to pass until you've overridden it."""
 
 ADAPTER: str = os.environ.get("IPHONEBRIDGE_ADAPTER", "hci0")
 """Local Bluetooth adapter."""
