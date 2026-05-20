@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.1.0] — 2026-05-19
+
+First tagged release. Working iphonebridge daemon on Pop!_OS 24.04
+against iPhone 16 Pro Max running iOS 26.5.
+
+### Confirmed working
+- Real-time SMS + iMessage notifications via MAP MNS push
+- Outgoing SMS + iMessage send via MAP `PushMessage` — iOS auto-routes
+  as iMessage when the recipient is iMessage-capable
+- 1000+ contacts pulled via PBAP, cached in SQLite, name-resolved for
+  incoming messages
+- systemd user service for autostart, graceful degradation when iPhone
+  toggles are off, automatic retry every 60s
+- DBus service `com.gabriel.iphonebridge.Messages1` with Send,
+  ListRecent, IsHealthy methods
+- CLI: `run`, `doctor`, `pair-setup`, `sms-list`, `sms-send`,
+  `contacts-sync`, `version`
+
+### Documented constraints (won't change)
+- No iMessage attachments / reactions / read receipts / typing
+  indicators (MAP doesn't expose them)
+- No group iMessage / MMS / RCS (MAP is 1:1 only)
+- No per-app notifications (ANCS over BLE, would need a second BT
+  adapter — Phase 2a)
+- No outgoing call audio routing (HFP HF role — Phase 2c)
+
 ## [Unreleased]
 
 ### Project-defining discoveries (2026-05-19, post-launch)
