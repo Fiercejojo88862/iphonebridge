@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system Bluetooth + Python bindings
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            python3-dbus python3-gi python3-venv python3-pip
+          # bluez and bluez-obexd are not strictly required for the unit
+          # tests (which are pure parsers) but install them anyway so any
+          # future integration test can run too.
+          sudo apt-get install -y --no-install-recommends bluez bluez-obexd
+
+      - name: Set up project venv (inherits system PyGObject + dbus)
+        run: |
+          python3 -m venv --system-site-packages .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Verify imports of dbus-bound modules
+        run: |
+          source .venv/bin/activate
+          python -c "from iphonebridge.daemon import Daemon; print('daemon ok')"
+          python -c "from iphonebridge.obex.map_send import build_bmessage; print('map_send ok')"
+          python -c "from iphonebridge.dbus_service import MessagesService; print('dbus_service ok')"
+
+      - name: pytest
+        run: |
+          source .venv/bin/activate
+          pytest tests/ -v --color=yes
+
+      - name: ruff
+        run: |
+          source .venv/bin/activate
+          ruff check src/ tests/

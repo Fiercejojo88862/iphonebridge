@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal
 
-
 # ---- helpers ------------------------------------------------------------
 
 _PHONE_KEEP = re.compile(r"\D")
@@ -89,7 +88,9 @@ class SmsEvent:
         }
 
 
-def sms_event_from_message1_props(handle: str, props: dict, contact_name: str | None = None) -> SmsEvent:
+def sms_event_from_message1_props(
+    handle: str, props: dict, contact_name: str | None = None,
+) -> SmsEvent:
     """Construct an SmsEvent from BlueZ's org.bluez.obex.Message1 properties.
 
     See spike/RESULTS.md §3 — the SMS body comes from `Subject`.

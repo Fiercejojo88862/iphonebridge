@@ -15,7 +15,7 @@ import dbus
 import dbus.exceptions
 
 from iphonebridge import config
-from iphonebridge.bus import obex, session_bus
+from iphonebridge.bus import obex
 
 log = logging.getLogger(__name__)
 

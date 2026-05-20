@@ -87,12 +87,12 @@ class _AncsAdvert(dbus.service.Object):
 
     @dbus.service.method("org.bluez.LEAdvertisement1",
                          in_signature="", out_signature="")
-    def Release(self) -> None:  # noqa: N802 — DBus method name
+    def Release(self) -> None:
         return None
 
     @dbus.service.method("org.freedesktop.DBus.Properties",
                          in_signature="s", out_signature="a{sv}")
-    def GetAll(self, iface: str) -> dict[str, Any]:  # noqa: N802
+    def GetAll(self, iface: str) -> dict[str, Any]:
         if iface != "org.bluez.LEAdvertisement1":
             raise dbus.exceptions.DBusException(
                 f"Unknown interface {iface}",
@@ -106,7 +106,7 @@ class _AncsAdvert(dbus.service.Object):
 
     @dbus.service.method("org.freedesktop.DBus.Properties",
                          in_signature="ss", out_signature="v")
-    def Get(self, iface: str, prop: str):  # noqa: N802
+    def Get(self, iface: str, prop: str):
         return self.GetAll(iface)[prop]
 
 

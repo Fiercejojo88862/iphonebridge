@@ -39,7 +39,7 @@ class MessagesService(dbus.service.Object):
         self.sessions = sessions
 
     @dbus.service.method(IFACE, in_signature="ss", out_signature="s")
-    def Send(self, recipient: str, body: str) -> str:  # noqa: N802 — DBus method
+    def Send(self, recipient: str, body: str) -> str:
         log.info("DBus Send called for %s (%d-byte body)", recipient, len(body))
         if not recipient.strip() or not body.strip():
             raise dbus.exceptions.DBusException(
@@ -60,7 +60,7 @@ class MessagesService(dbus.service.Object):
             )
 
     @dbus.service.method(IFACE, in_signature="su", out_signature="s")
-    def ListRecent(self, folder: str, limit: int) -> str:  # noqa: N802
+    def ListRecent(self, folder: str, limit: int) -> str:
         """Return up to `limit` recent messages from `folder` as a JSON array."""
         import json
         if self.sessions.map is None:
@@ -81,7 +81,7 @@ class MessagesService(dbus.service.Object):
         return json.dumps(msgs, ensure_ascii=False)
 
     @dbus.service.method(IFACE, in_signature="", out_signature="b")
-    def IsHealthy(self) -> bool:  # noqa: N802
+    def IsHealthy(self) -> bool:
         return self.sessions.map is not None
 
 

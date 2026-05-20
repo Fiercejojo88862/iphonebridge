@@ -18,7 +18,6 @@ import typer
 
 from iphonebridge.bus import system_bus
 
-
 LOCAL_ENV_PATH = Path(
     os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")
 ) / "iphonebridge" / "local.env"
@@ -116,7 +115,7 @@ def run_wizard(*, restart_after: bool = True) -> int:
 
     if len(candidates) == 1:
         chosen = candidates[0]
-        if not typer.confirm(f"Use this device?", default=True):
+        if not typer.confirm("Use this device?", default=True):
             return 0
     else:
         idx_s = typer.prompt("Pick a device by number", default="1")

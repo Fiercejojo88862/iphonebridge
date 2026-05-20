@@ -31,7 +31,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-
 _VCARD_RE = re.compile(
     r"BEGIN:VCARD(?P<body>.*?)END:VCARD", re.DOTALL | re.IGNORECASE
 )
