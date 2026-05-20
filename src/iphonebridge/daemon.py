@@ -3,18 +3,24 @@
 Startup order:
   1. bluez_setup.prepare — set adapter CoD, register BLE advert
   2. SessionManager.open_all — long-lived MAP + PBAP OBEX sessions
+     (retries on Forbidden — see _try_open_sessions)
   3. ContactsResolver — warm SQLite cache; if empty, pull PBAP
   4. MapEventListener — subscribe to MAP MNS push events
   5. Sinks — register libnotify + jsonl
-  6. GLib.MainLoop().run()
+  6. DBus service (com.gabriel.iphonebridge.Messages1)
+  7. GLib.MainLoop().run()
 
 Shutdown order is the reverse.
+
+Degraded mode: if MAP/PBAP can't open (typically because the user hasn't
+enabled iPhone toggles yet), the daemon stays alive, logs a clear
+remediation hint, and retries every 60s. This avoids the systemd
+crash-loop we hit in an earlier version.
 """
 from __future__ import annotations
 
 import logging
 import signal
-from collections.abc import Iterable
 
 from gi.repository import GLib
 
@@ -24,7 +30,7 @@ from iphonebridge.contacts import ContactsResolver, pull_phonebook
 from iphonebridge.dbus_service import MessagesService, claim_bus_name
 from iphonebridge.events import SmsEvent
 from iphonebridge.obex.map_events import MapEventListener
-from iphonebridge.obex.sessions import SessionManager
+from iphonebridge.obex.sessions import SessionError, SessionManager
 from iphonebridge.sinks import Sink
 from iphonebridge.sinks.jsonl import JsonlSink
 from iphonebridge.sinks.libnotify import LibnotifySink
@@ -34,6 +40,10 @@ log = logging.getLogger(__name__)
 # How often to re-pull the iPhone's phonebook (so the cache picks up new contacts)
 CONTACTS_REFRESH_SEC = 24 * 60 * 60  # 24h
 
+# How often to retry MAP/PBAP session open when blocked by the iPhone
+# (toggles off, paired-but-not-connected, etc.)
+SESSION_RETRY_SEC = 60
+
 
 class Daemon:
     def __init__(self) -> None:
@@ -42,8 +52,10 @@ class Daemon:
         self.sinks: list[Sink] = []
         self.listener: MapEventListener | None = None
         self._contacts_refresh_id: int | None = None
+        self._session_retry_id: int | None = None
         self._bus_name = None
         self._dbus_service: MessagesService | None = None
+        self._post_sessions_done = False
 
     # ---- lifecycle -------------------------------------------------------
 
@@ -58,37 +70,12 @@ class Daemon:
                 "adapter is in A/V Hands-Free CoD if the toggles aren't there."
             )
 
-        self.sessions.open_all()
+        # Try to open MAP/PBAP. If blocked, stay alive and retry every minute.
+        self._try_open_sessions(first_attempt=True)
 
-        # Warm contacts; if empty, do a one-time pull. PBAP pull is cheap.
-        if self.contacts.count() == 0:
-            log.info("contacts cache empty — pulling from iPhone via PBAP")
-            self._refresh_contacts()
-
-        # Schedule periodic contacts refresh
-        self._contacts_refresh_id = GLib.timeout_add_seconds(
-            CONTACTS_REFRESH_SEC, self._periodic_refresh_contacts
-        )
-
-        # Set up sinks
-        self.sinks.append(JsonlSink())
-        try:
-            self.sinks.append(LibnotifySink())
-        except Exception:
-            log.exception("libnotify sink failed to init — continuing")
-
-        # Wire up MAP MNS listener.
-        # IMPORTANT: pass an indirect lambda so the resolver can be refreshed
-        # in place via self.contacts.refresh() without breaking this binding.
-        self.listener = MapEventListener(
-            sessions=self.sessions,
-            on_sms=self._fanout,
-            resolve_contact=lambda raw: self.contacts.resolve(raw),
-        )
-        self.listener.start()
-
-        # Expose a DBus service so the CLI can request sends without
-        # tearing down the daemon's MAP session.
+        # Always set up the DBus service so a CLI can at least query
+        # IsHealthy and learn the daemon's status. Send() will fail until
+        # the MAP session is open, but the service surface itself is up.
         try:
             self._bus_name = claim_bus_name()
             self._dbus_service = MessagesService(self._bus_name, self.sessions)
@@ -100,6 +87,92 @@ class Daemon:
         # Signal handlers
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, self._signal)
+
+        if not self._post_sessions_done:
+            log.warning("=== iphonebridge running in DEGRADED mode ===")
+            log.warning("    No MAP/PBAP session yet. Retrying every %ds.",
+                        SESSION_RETRY_SEC)
+        # The "ready" line in the happy path is emitted by
+        # _post_sessions_setup, so we don't duplicate it here.
+
+    def _try_open_sessions(self, *, first_attempt: bool) -> None:
+        """Open MAP + PBAP. On Forbidden, schedule a periodic retry instead
+        of crashing. Idempotent."""
+        try:
+            self.sessions.open_all()
+        except SessionError as e:
+            msg = str(e)
+            log.warning("could not open MAP/PBAP sessions: %s", msg)
+            if "Forbidden" in msg or "0x43" in msg:
+                log.warning("")
+                log.warning("  → This usually means the iPhone toggles aren't on.")
+                log.warning("  → On the iPhone:")
+                log.warning("       Settings → Bluetooth → tap (i) next to this device")
+                log.warning("       Enable: Show Message Notifications")
+                log.warning("       Enable: Sync Contacts")
+                log.warning("")
+            if first_attempt and self._session_retry_id is None:
+                self._session_retry_id = GLib.timeout_add_seconds(
+                    SESSION_RETRY_SEC, self._retry_sessions
+                )
+                log.warning("  → Daemon stays running. Will retry every %ds.",
+                            SESSION_RETRY_SEC)
+            return
+        # Sessions opened — wire everything that depends on them.
+        self._post_sessions_setup()
+
+    def _retry_sessions(self) -> bool:
+        """GLib timer callback. Return True to keep the timer firing."""
+        log.info("retrying MAP/PBAP session open ...")
+        try:
+            self.sessions.open_all()
+        except SessionError as e:
+            # Still blocked — keep timer alive
+            log.info("still blocked: %s", str(e)[:120])
+            return True
+
+        log.info("sessions opened on retry — promoting to ready state")
+        self._post_sessions_setup()
+        # Stop the retry timer
+        self._session_retry_id = None
+        return False
+
+    def _post_sessions_setup(self) -> None:
+        """Everything that requires live MAP+PBAP sessions. Idempotent so
+        we can call it either at first-attempt success or at retry success."""
+        if self._post_sessions_done:
+            return
+        self._post_sessions_done = True
+
+        # Warm contacts; if empty, do a one-time pull. PBAP pull is cheap.
+        if self.contacts.count() == 0:
+            log.info("contacts cache empty — pulling from iPhone via PBAP")
+            self._refresh_contacts()
+
+        # Schedule periodic contacts refresh
+        if self._contacts_refresh_id is None:
+            self._contacts_refresh_id = GLib.timeout_add_seconds(
+                CONTACTS_REFRESH_SEC, self._periodic_refresh_contacts
+            )
+
+        # Set up sinks
+        if not self.sinks:
+            self.sinks.append(JsonlSink())
+            try:
+                self.sinks.append(LibnotifySink())
+            except Exception:
+                log.exception("libnotify sink failed to init — continuing")
+
+        # Wire up MAP MNS listener.
+        # IMPORTANT: pass an indirect lambda so the resolver can be refreshed
+        # in place via self.contacts.refresh() without breaking this binding.
+        if self.listener is None:
+            self.listener = MapEventListener(
+                sessions=self.sessions,
+                on_sms=self._fanout,
+                resolve_contact=lambda raw: self.contacts.resolve(raw),
+            )
+            self.listener.start()
 
         log.info("=== iphonebridge ready (contacts=%d, sinks=%s) ===",
                  self.contacts.count(),
@@ -122,9 +195,14 @@ class Daemon:
 
     def stop(self) -> None:
         log.info("=== iphonebridge stopping ===")
-        if self._contacts_refresh_id is not None:
-            GLib.source_remove(self._contacts_refresh_id)
-            self._contacts_refresh_id = None
+        for tid_attr in ("_contacts_refresh_id", "_session_retry_id"):
+            tid = getattr(self, tid_attr, None)
+            if tid is not None:
+                try:
+                    GLib.source_remove(tid)
+                except Exception:
+                    pass
+                setattr(self, tid_attr, None)
         if self.listener is not None:
             self.listener.stop()
         self.sessions.close_all()
