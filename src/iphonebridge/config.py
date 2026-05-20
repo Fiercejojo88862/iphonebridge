@@ -8,6 +8,36 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+
+def _load_local_env() -> None:
+    """Source ~/.config/iphonebridge/local.env into os.environ before we
+    read settings. Mirrors what systemd's `EnvironmentFile=` does for the
+    daemon, so the CLI gets the same config when invoked from a fresh
+    shell without anyone having to `source` anything.
+
+    Anything already in os.environ wins — explicit env > local.env."""
+    config_path = (
+        Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+        / "iphonebridge" / "local.env"
+    )
+    if not config_path.exists():
+        return
+    try:
+        for raw in config_path.read_text().splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            k, v = k.strip(), v.strip().strip('"').strip("'")
+            if k:
+                os.environ.setdefault(k, v)
+    except OSError:
+        pass
+
+
+_load_local_env()
+
+
 # ---- target device ------------------------------------------------------
 
 IPHONE_MAC: str = os.environ.get("IPHONEBRIDGE_MAC", "AA:BB:CC:DD:EE:FF")
