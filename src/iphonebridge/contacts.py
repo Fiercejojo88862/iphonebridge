@@ -191,6 +191,37 @@ class ContactsResolver:
         self._warm()
         return len(self._mem)
 
+    def find_by_name(self, query: str) -> list[tuple[str, str]]:
+        """Reverse lookup — name substring → list of (display_name, phone).
+
+        Case-insensitive substring match against full_name. Returns all
+        phones for each matching contact, deduplicated. Empty list if
+        no matches.
+        """
+        q = (query or "").strip().lower()
+        if not q:
+            return []
+        seen: set[tuple[str, str]] = set()
+        try:
+            with closing(_open_db()) as db:
+                cur = db.execute(
+                    "SELECT c.full_name, p.phone_norm "
+                    "FROM contacts c JOIN phones p ON p.contact_id = c.id "
+                    "WHERE c.full_name != '' "
+                    "  AND LOWER(c.full_name) LIKE ? "
+                    "ORDER BY c.full_name",
+                    (f"%{q}%",),
+                )
+                for name, phone in cur:
+                    key = (name, phone)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+        except sqlite3.Error as e:
+            log.warning("contacts find_by_name failed: %s", e)
+            return []
+        return list(seen)
+
     def resolve(self, raw: str | None) -> str | None:
         norm = normalize_phone(raw)
         if not norm:

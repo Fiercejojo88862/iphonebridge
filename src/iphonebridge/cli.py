@@ -232,9 +232,81 @@ def pair_setup(
     raise typer.Exit(code=run_wizard(restart_after=not no_restart))
 
 
+_RECIPIENT_LOOKS_LIKE_PHONE = __import__("re").compile(r"^\+?[\d\s()\-.]{7,}$")
+
+
+def _resolve_recipient(raw: str) -> str:
+    """Turn a recipient argument into a phone number.
+
+    - If it parses as a phone number, return it normalized with leading +.
+    - Otherwise, treat as a contact name substring, look it up in the
+      contacts cache, prompt to disambiguate if multiple matches.
+
+    Aborts the command (Exit) if no match is found.
+    """
+    raw = raw.strip()
+    if _RECIPIENT_LOOKS_LIKE_PHONE.match(raw):
+        # Keep it as the user typed it; daemon-side bMessage builder is
+        # liberal about format.
+        return raw
+
+    # Treat as a name. Pull candidates from contact cache.
+    from iphonebridge.contacts import ContactsResolver
+    resolver = ContactsResolver()
+    matches = resolver.find_by_name(raw)
+    if not matches:
+        typer.echo(typer.style(
+            f"No contact matched {raw!r}. Try a phone number with +, or run "
+            "`iphonebridge contacts-sync` to refresh the cache.",
+            fg=typer.colors.RED,
+        ))
+        raise typer.Exit(code=2)
+
+    # Unique-by-name first; if exactly one unique name (across possibly
+    # multiple numbers), pick a sensible default.
+    by_name: dict[str, list[str]] = {}
+    for name, phone in matches:
+        by_name.setdefault(name, []).append(phone)
+
+    if len(by_name) == 1:
+        name = next(iter(by_name))
+        phones = by_name[name]
+        if len(phones) == 1:
+            chosen = phones[0]
+            typer.echo(typer.style(
+                f"→ {name}  +{chosen}", fg=typer.colors.CYAN))
+            return f"+{chosen}"
+        # Multiple phones for one contact — list and prompt
+        typer.echo(f"{name} has multiple numbers:")
+        for i, p in enumerate(phones, 1):
+            typer.echo(f"  [{i}] +{p}")
+        idx = typer.prompt("Pick", type=int, default=1)
+        return f"+{phones[idx - 1]}"
+
+    # Multiple distinct contacts — show + prompt
+    typer.echo(f"Multiple contacts match {raw!r}:")
+    flat: list[tuple[str, str]] = []
+    for name, phones in sorted(by_name.items()):
+        for p in phones:
+            flat.append((name, p))
+    for i, (name, p) in enumerate(flat, 1):
+        typer.echo(f"  [{i}] {name}  +{p}")
+    idx = typer.prompt("Pick", type=int, default=1)
+    try:
+        chosen_name, chosen_phone = flat[idx - 1]
+    except IndexError:
+        typer.echo(typer.style("Invalid choice.", fg=typer.colors.RED))
+        raise typer.Exit(code=2) from None
+    typer.echo(typer.style(
+        f"→ {chosen_name}  +{chosen_phone}", fg=typer.colors.CYAN))
+    return f"+{chosen_phone}"
+
+
 @app.command("sms-send")
 def sms_send(
-    recipient: str = typer.Argument(..., help="Recipient phone number, e.g. +15551234567"),
+    recipient: str = typer.Argument(...,
+        help="Recipient: phone (e.g. +15551234567) OR contact name substring "
+             "(e.g. 'Maddie')"),
     body: str = typer.Argument(..., help="Message body"),
     verbose: bool = typer.Option(False, "-v", "--verbose"),
 ):
@@ -246,6 +318,10 @@ def sms_send(
     Requires the daemon to be running (systemctl --user start iphonebridge).
     """
     _setup_logging(verbose)
+
+    # If the recipient doesn't look like a phone, resolve via contacts.
+    resolved = _resolve_recipient(recipient)
+
     import dbus
     import dbus.mainloop.glib
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
@@ -260,16 +336,16 @@ def sms_send(
             fg=typer.colors.RED,
         ))
         typer.echo("Start it with: systemctl --user start iphonebridge")
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=2) from None
 
     try:
-        transfer = str(iface.Send(recipient, body, timeout=45))
+        transfer = str(iface.Send(resolved, body, timeout=45))
     except dbus.exceptions.DBusException as e:
         typer.echo(typer.style(
             f"Send failed: {e.get_dbus_name()}\n  {e.get_dbus_message()}",
             fg=typer.colors.RED,
         ))
-        raise typer.Exit(code=3)
+        raise typer.Exit(code=3) from None
 
     typer.echo(typer.style(
         f"Sent. Transfer: {transfer}",
