@@ -11,6 +11,7 @@ from iphonebridge.events import (
     normalize_phone,
     parse_map_timestamp,
     sms_event_from_message1_props,
+    sms_sent_event,
 )
 
 
@@ -110,6 +111,36 @@ class TestSmsEventFromProps:
         props = {"SenderAddress": "+15551234567", "Subject": "hi"}
         e = sms_event_from_message1_props("h4", props)
         assert e.sender_phone == "+15551234567"
+
+
+class TestSmsSentEvent:
+    def test_recipient_lands_in_sender_fields(self):
+        # A sent event carries the recipient in sender_* so it threads with
+        # incoming messages from the same person.
+        e = sms_sent_event("+15551234567", "on my way",
+                           contact_name="Maddie",
+                           transfer_path="/org/bluez/obex/client/session0/transfer3")
+        assert e.kind == "sms_sent"
+        assert e.sender_phone == "+15551234567"
+        assert e.sender_phone_norm == "15551234567"
+        assert e.contact_name == "Maddie"
+        assert e.body == "on my way"
+        assert e.is_read is True
+        assert e.handle == "transfer3"
+        assert e.timestamp is not None
+        assert e.display_sender == "Maddie"
+
+    def test_handle_synthesized_without_transfer_path(self):
+        e = sms_sent_event("+15551234567", "hi")
+        assert e.handle.startswith("sent-")
+
+    def test_to_dict_is_json_serializable(self):
+        import json
+        e = sms_sent_event("+15551234567", "hi", contact_name="Alice")
+        parsed = json.loads(json.dumps(e.to_dict()))
+        assert parsed["kind"] == "sms_sent"
+        assert parsed["contact_name"] == "Alice"
+        assert parsed["body"] == "hi"
 
 
 class TestSmsEventDisplay:

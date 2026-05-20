@@ -45,7 +45,7 @@ def parse_map_timestamp(ts: str | None) -> datetime | None:
 
 # ---- event types --------------------------------------------------------
 
-EventKind = Literal["sms_received", "sms_seen"]
+EventKind = Literal["sms_received", "sms_seen", "sms_sent"]
 
 
 @dataclass(slots=True)
@@ -89,6 +89,36 @@ class SmsEvent:
             "raw_type": self.raw_type,
             "seen_at": self.seen_at.isoformat(),
         }
+
+
+def sms_sent_event(
+    recipient: str,
+    body: str,
+    *,
+    contact_name: str | None = None,
+    transfer_path: str = "",
+) -> SmsEvent:
+    """Build an SmsEvent for a message *we* just sent via MAP PushMessage.
+
+    For a sent message the relevant party is the recipient, so the
+    `sender_*` / `contact_name` fields carry the recipient — that keeps it
+    in the same conversation thread as incoming messages from that person.
+    """
+    handle = (transfer_path.rsplit("/", 1)[-1] if transfer_path
+              else f"sent-{datetime.now(timezone.utc):%Y%m%d%H%M%S%f}")
+    return SmsEvent(
+        kind="sms_sent",
+        handle=handle,
+        sender_phone=recipient,
+        sender_phone_norm=normalize_phone(recipient),
+        contact_name=contact_name,
+        body=body,
+        timestamp=datetime.now().astimezone(),
+        is_read=True,
+        raw_status="sent",
+        raw_type="sms_sent",
+        message_path=None,
+    )
 
 
 def sms_event_from_message1_props(

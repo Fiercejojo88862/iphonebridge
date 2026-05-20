@@ -24,6 +24,20 @@ against iPhone 16 Pro Max running iOS 26.5.
 - No group iMessage / MMS / RCS (MAP is 1:1 only)
 - No outgoing call audio routing (HFP HF role — Phase 2c)
 
+## [0.4.1] — 2026-05-20
+
+### Sent messages in conversation history
+
+- The daemon now records every message sent through iphonebridge (the UI
+  compose box or `iphonebridge sms-send`) to `events.jsonl` as a `sms_sent`
+  event, and broadcasts a `MessageSent` signal on `Events1`. The UI threads
+  these in, so a conversation shows both sides — incoming **and** the replies
+  you sent from the desktop.
+- No desktop notification fires for your own sent messages.
+- Note: messages composed on the iPhone itself remain invisible — iOS does
+  not expose sent content over MAP (the `sent` folder is empty, and no MNS
+  push fires for outgoing). This was verified empirically; see the commit.
+
 ## [0.4.0] — 2026-05-20
 
 ### Phase 2d — GTK4 / libadwaita desktop app

@@ -22,6 +22,7 @@ Calls1 (HFP, via oFono):
 
 Events1 (live event feed for separate UIs):
   • MessageReceived(dict)   [signal] — a new SMS/iMessage arrived
+  • MessageSent(dict)       [signal] — a message we sent via Send()
   • MessageSeen(dict)       [signal] — a message's read-state changed
   • AncsNotification(dict)  [signal] — a per-app ANCS notification
 
@@ -75,10 +76,14 @@ class MessagesService(dbus.service.Object):
         bus_name: dbus.service.BusName,
         sessions: SessionManager,
         hfp: HfpManager | None = None,
+        on_sent=None,
     ):
         super().__init__(bus_name, OBJECT_PATH)
         self.sessions = sessions
         self.hfp = hfp
+        # on_sent(recipient, body, transfer_path) — daemon hook to record a
+        # message we just sent (logs it to history + the event feed).
+        self._on_sent = on_sent
 
     # ---- Messages1 ------------------------------------------------------
 
@@ -96,12 +101,20 @@ class MessagesService(dbus.service.Object):
                 name="com.gabriel.iphonebridge.Error.NotReady",
             )
         try:
-            return send_message(self.sessions.map_path, recipient, body)
+            transfer = send_message(self.sessions.map_path, recipient, body)
         except Exception as e:
             log.exception("Send failed")
             raise dbus.exceptions.DBusException(
                 str(e), name="com.gabriel.iphonebridge.Error.SendFailed"
             )
+        # Record the sent message (history + event feed). Never let a logging
+        # failure fail the send — the message already went out.
+        if self._on_sent is not None:
+            try:
+                self._on_sent(recipient, body, transfer)
+            except Exception:
+                log.exception("on_sent hook failed (message was still sent)")
+        return transfer
 
     @dbus.service.method(IFACE, in_signature="su", out_signature="s")
     def ListRecent(self, folder: str, limit: int) -> str:
@@ -227,6 +240,10 @@ class MessagesService(dbus.service.Object):
         """Emitted when a new SMS/iMessage arrives. Payload: SmsEvent.to_dict()."""
 
     @dbus.service.signal(EVENTS_IFACE, signature="a{sv}")
+    def MessageSent(self, props):
+        """Emitted when we send a message via Send(). Payload: SmsEvent.to_dict()."""
+
+    @dbus.service.signal(EVENTS_IFACE, signature="a{sv}")
     def MessageSeen(self, props):
         """Emitted on a message read-state change. Payload: SmsEvent.to_dict()."""
 
@@ -238,8 +255,11 @@ class MessagesService(dbus.service.Object):
         """Daemon-side helper — push an SmsEvent out as a D-Bus signal."""
         try:
             payload = _variant_dict(event.to_dict())
-            if getattr(event, "kind", "") == "sms_seen":
+            kind = getattr(event, "kind", "")
+            if kind == "sms_seen":
                 self.MessageSeen(payload)
+            elif kind == "sms_sent":
+                self.MessageSent(payload)
             else:
                 self.MessageReceived(payload)
         except Exception:

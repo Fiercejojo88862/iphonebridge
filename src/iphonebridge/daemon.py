@@ -30,7 +30,7 @@ from iphonebridge.ancs.events import AncsEvent
 from iphonebridge.bus import main_loop
 from iphonebridge.contacts import ContactsResolver, pull_phonebook
 from iphonebridge.dbus_service import MessagesService, claim_bus_name
-from iphonebridge.events import SmsEvent
+from iphonebridge.events import SmsEvent, sms_sent_event
 from iphonebridge.hfp.events import CallEvent
 from iphonebridge.hfp.ofono_client import HfpManager
 from iphonebridge.obex.map_events import MapEventListener
@@ -109,7 +109,8 @@ class Daemon:
         try:
             self._bus_name = claim_bus_name()
             self._dbus_service = MessagesService(
-                self._bus_name, self.sessions, hfp=self.hfp)
+                self._bus_name, self.sessions, hfp=self.hfp,
+                on_sent=self._record_sent)
             log.info("DBus service ready: com.gabriel.iphonebridge")
         except Exception:
             log.exception("DBus service registration failed — continuing "
@@ -266,6 +267,17 @@ class Daemon:
                               sink.name, event.handle)
         if self._dbus_service is not None:
             self._dbus_service.emit_message(event)
+
+    def _record_sent(self, recipient: str, body: str, transfer_path: str) -> None:
+        """Hook for DBus Send() — log + broadcast a message we just sent so it
+        shows up in conversation history alongside incoming messages."""
+        event = sms_sent_event(
+            recipient, body,
+            contact_name=self.contacts.resolve(recipient),
+            transfer_path=transfer_path,
+        )
+        log.info("sms_sent to %s: %r", event.display_sender, (body or "")[:80])
+        self._fanout(event)
 
     def _fanout_ancs(self, event: AncsEvent) -> None:
         for sink in self.sinks:

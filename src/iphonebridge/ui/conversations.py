@@ -67,12 +67,14 @@ class ConversationsPage(Gtk.Box):
 
         self._load_history()
         client.connect("message-received", self._on_incoming)
+        client.connect("message-sent", self._on_sent_event)
 
     # ---- data ----------------------------------------------------------
 
     def _load_history(self) -> None:
-        for ev in self._client.read_events(kinds={"sms_received"}):
-            self._ingest(ev, outgoing=False, refresh=False)
+        for ev in self._client.read_events(kinds={"sms_received", "sms_sent"}):
+            self._ingest(ev, outgoing=(ev.get("kind") == "sms_sent"),
+                         refresh=False)
         self._rebuild_thread_list()
 
     def _ingest(self, ev: dict, *, outgoing: bool, refresh: bool = True) -> None:
@@ -173,13 +175,13 @@ class ConversationsPage(Gtk.Box):
         self._send_btn.set_sensitive(False)
 
         def done(_transfer: str) -> None:
+            # The outgoing bubble is added when the daemon's MessageSent
+            # signal arrives (see _on_sent_event) — no optimistic append,
+            # so there's no chance of a duplicate.
             self._entry.set_text("")
             self._entry.set_sensitive(True)
             self._send_btn.set_sensitive(True)
             self._entry.grab_focus()
-            self._ingest({"contact_name": thread["name"],
-                          "sender_phone": thread["phone"],
-                          "body": body, "seen_at": ""}, outgoing=True)
 
         def failed(text: str) -> None:
             self._entry.set_sensitive(True)
@@ -192,3 +194,6 @@ class ConversationsPage(Gtk.Box):
 
     def _on_incoming(self, _client, ev: dict) -> None:
         self._ingest(ev, outgoing=False)
+
+    def _on_sent_event(self, _client, ev: dict) -> None:
+        self._ingest(ev, outgoing=True)

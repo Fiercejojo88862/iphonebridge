@@ -78,6 +78,9 @@ class LibnotifySink:
             "libnotify sink ready (persistent + bidirectional read-sync)")
 
     def handle(self, event: SmsEvent) -> None:
+        # Don't pop a desktop notification for a message we ourselves sent.
+        if event.kind == "sms_sent":
+            return
         title = f"\U0001f4ac {event.display_sender}"
         body = (event.body or "").strip()
         if len(body) > _BODY_LIMIT:

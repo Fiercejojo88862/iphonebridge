@@ -61,6 +61,7 @@ class DaemonClient(GObject.Object):
 
     __gsignals__: ClassVar = {
         "message-received":     (GObject.SignalFlags.RUN_FIRST, None, (object,)),
+        "message-sent":         (GObject.SignalFlags.RUN_FIRST, None, (object,)),
         "message-seen":         (GObject.SignalFlags.RUN_FIRST, None, (object,)),
         "ancs-notification":    (GObject.SignalFlags.RUN_FIRST, None, (object,)),
         "call-state-changed":   (GObject.SignalFlags.RUN_FIRST, None, (object,)),
@@ -82,6 +83,7 @@ class DaemonClient(GObject.Object):
         # add_signal_receiver works even before the daemon is up — delivery
         # just starts once it claims the bus name.
         for sig, gsig in (("MessageReceived", "message-received"),
+                          ("MessageSent", "message-sent"),
                           ("MessageSeen", "message-seen"),
                           ("AncsNotification", "ancs-notification")):
             self._matches.append(self._bus.add_signal_receiver(
