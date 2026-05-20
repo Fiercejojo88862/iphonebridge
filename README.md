@@ -7,6 +7,7 @@ A native Linux desktop bridge for a paired iPhone over Bluetooth. SMS notificati
 ## What it does
 
 - **Real-time SMS *and iMessage* push notifications.** A desktop popup appears within ~20 ms of any message arriving on the iPhone, showing the sender's name (resolved from the iPhone's address book) and the message body. **iMessage included — see the surprise finding below.**
+- **Every iOS app's notifications mirror to the desktop** (v0.2.0+): Slack, WhatsApp, Mail, Discord, anything that posts to iOS Notification Center. Title, body, app name. See `iphonebridge ancs-enable` for the one-time setup.
 - **Contacts sync.** 1000+ contacts pulled from the iPhone via PBAP, cached in SQLite, auto-refreshed every 24 hours.
 - **Message history readable from the CLI.** `iphonebridge sms-list` dumps recent inbox activity from the local event log.
 - **Persistent and unattended.** Runs as a systemd user service. Auto-starts on login, restarts on failure, logs to journald.

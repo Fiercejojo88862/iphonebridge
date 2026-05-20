@@ -22,8 +22,6 @@ against iPhone 16 Pro Max running iOS 26.5.
 - No iMessage attachments / reactions / read receipts / typing
   indicators (MAP doesn't expose them)
 - No group iMessage / MMS / RCS (MAP is 1:1 only)
-- No per-app notifications (ANCS over BLE, would need a second BT
-  adapter — Phase 2a)
 - No outgoing call audio routing (HFP HF role — Phase 2c)
 
 ## [Unreleased]
