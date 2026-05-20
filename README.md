@@ -1,270 +1,247 @@
-# iphonebridge
+<div align="center">
 
-A native Linux desktop bridge for a paired iPhone over Bluetooth. SMS notifications with sender names, conversation history readable from the CLI, and contacts cached locally. Built because Microsoft's Phone Link works on Windows but **no equivalent exists on Linux/GNOME** — and the open-source alternatives (KDE Connect, ancs4linux, macaron) each cover only a fraction of what's possible.
+# 📱 iphonebridge
 
-> **Status:** Alpha. Phase 1 (MVP) complete and stable. Tested against **iPhone 16 Pro Max running iOS 26.5** on **Pop!_OS 24.04**. See [`spike/RESULTS.md`](spike/RESULTS.md) for the empirical findings underpinning the design.
+**Your iPhone's messages, notifications, and contacts — on your Linux desktop, over Bluetooth.**
 
-## What it does
+[![CI](https://github.com/gabrielmeir53/iphonebridge/actions/workflows/ci.yml/badge.svg)](https://github.com/gabrielmeir53/iphonebridge/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/gabrielmeir53/iphonebridge?color=brightgreen)](https://github.com/gabrielmeir53/iphonebridge/releases)
+[![License: GPL v2](https://img.shields.io/badge/license-GPL--2.0-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org)
+[![Platform: Linux](https://img.shields.io/badge/platform-Linux%20%2F%20GNOME-lightgrey.svg)](#requirements)
 
-- **Real-time SMS *and iMessage* push notifications.** A desktop popup appears within ~20 ms of any message arriving on the iPhone, showing the sender's name (resolved from the iPhone's address book) and the message body. **iMessage included — see the surprise finding below.**
-- **Every iOS app's notifications mirror to the desktop** (v0.2.0+): Slack, WhatsApp, Mail, Discord, anything that posts to iOS Notification Center. Title, body, app name. See `iphonebridge ancs-enable` for the one-time setup.
-- **Contacts sync.** 1000+ contacts pulled from the iPhone via PBAP, cached in SQLite, auto-refreshed every 24 hours.
-- **Message history readable from the CLI.** `iphonebridge sms-list` dumps recent inbox activity from the local event log.
-- **Persistent and unattended.** Runs as a systemd user service. Auto-starts on login, restarts on failure, logs to journald.
+*No Mac relay. No cloud service. No subscription. Just Bluetooth.*
 
-### The iMessage surprise (both read AND send work)
+</div>
 
-Every prior writeup of Bluetooth MAP on iOS — Apple Developer Forums, the ancs4linux project's docs, every "your iPhone won't show iMessage over Bluetooth" SO answer — says iMessage threads are invisible to MAP and you need a Mac relay (BlueBubbles / AirMessage / Beeper) to bridge them.
+---
 
-**That's not true on iOS 26.5**, at least not on an iPhone 16 Pro Max:
+Microsoft's **Phone Link** gives Windows users their iPhone's texts and notifications on the desktop. There has never been a Linux equivalent — KDE Connect needs the Android/iOS *app* and only does Wi-Fi, `ancs4linux` does notifications only, Mac-relay bridges (BlueBubbles, AirMessage) need an actual Mac, and Beeper costs money.
 
-- **Incoming iMessage flows through MAP MNS** just like SMS, labeled identically as `Type: sms-gsm`. The daemon mirrors them in real time, same code path. See [`spike/RESULTS.md`](spike/RESULTS.md) §6.
-- **Outgoing iMessage via MAP `PushMessage` ALSO works.** When we PushMessage to an iMessage-capable recipient, iOS routes it as iMessage — sender's thread shows a **blue bubble**, recipient gets iMessage delivery.
+**iphonebridge is that missing piece.** It's a small Python daemon that talks to a paired iPhone over standard Bluetooth profiles (MAP, PBAP, ANCS) and surfaces everything as native GNOME desktop notifications and a CLI.
 
-Together this makes iphonebridge **potentially the first free open-source Linux iMessage bridge that doesn't require a Mac relay** — BlueBubbles, AirMessage, Beeper become unnecessary for the read+send use cases that motivate most users.
+## ✨ What it does
 
-Whether this is a recent Apple change, a long-standing-but-undocumented exposure, or specific to iOS 26.x is not yet known. But for the daily-driver "see and reply to my iPhone messages on Linux" use case, **it works today**.
+| Feature | How | Status |
+|---|---|---|
+| 📨 **Incoming SMS + iMessage** as desktop notifications | MAP MNS push | ✅ |
+| 📤 **Send SMS + iMessage** from the CLI | MAP `PushMessage` | ✅ |
+| 👤 **Contact-name resolution** (1000s of contacts) | PBAP → SQLite cache | ✅ |
+| 🔔 **Every app's notifications** — Slack, WhatsApp, Mail… | ANCS over BLE | ✅ |
+| 🔁 **Read-state sync** — read on either device, syncs to both | MAP read-state writes | ✅ |
+| 📜 **Message history** from the terminal | `iphonebridge sms-list` | ✅ |
+| ⚙️ Runs unattended as a **systemd user service** | — | ✅ |
 
-### What it explicitly does *not* do
+### 🤯 The iMessage surprise
 
-Limits that come from Apple's Bluetooth stack and which are unlikely to change:
-- ~~No per-app notification mirroring~~ **ANCS works as of v0.2.0** — every iOS app's notifications (Slack, WhatsApp, Mail, etc.) mirror to the desktop in real time. The unlock is a fresh BLE-aware pairing: `iphonebridge ancs-enable` writes `LastUsedBearer=le` into BlueZ's pairing record + a forget/re-pair on the iPhone produces a proper BLE bond via CTKD. Requires an Intel BT adapter — per [bmh129/ancs4linux](https://github.com/bmh129/ancs4linux)'s hardware compatibility notes, Realtek dongles and most USB BT adapters don't do BLE properly with iOS.
-- **No outgoing call audio routing.** HFP Hands-Free role on Linux is a separate config rabbit hole (WirePlumber 1.5 + possibly oFono); deferred.
-- **No group iMessage / MMS / RCS.** iPhone's MAP exposes 1:1 threads only.
-- **No read receipts, typing indicators, message reactions, or full attachments.** Just text + sender + timestamp. Plenty for a notification mirror.
-- **No notification body when iPhone's "Show Previews" is set to "When Unlocked" or "Never".** MAP respects that setting; unfixable from Linux side.
+Every prior writeup of Bluetooth on iOS says **iMessage is invisible** to a paired computer — that you *must* use a Mac relay to bridge blue-bubble messages.
 
-## Requirements
+**That is not true on iOS 26.5.** iphonebridge receives *and sends* iMessage through the standard MAP Bluetooth profile, with no Mac, no Apple ID login, nothing. iOS labels iMessage and SMS identically (`Type: sms-gsm`) and exposes both. Outgoing messages route as iMessage automatically when the recipient is iMessage-capable.
 
-| | |
-|---|---|
-| OS | Pop!_OS 24.04 / Ubuntu 24.04 (any GNOME-based modern distro should work; tested only on Pop) |
-| Bluetooth | BlueZ 5.72+ with `bluez-obexd` |
-| Audio | PipeWire 1.x (only relevant if HFP support is added later) |
-| Python | 3.10+ |
-| iPhone | iOS 16.5+ recommended (tested on 26.5 on iPhone 16 Pro Max) |
-| Bluetooth hardware | Any modern adapter with BLE 4.0+; integrated controllers work fine |
+As far as we know, **iphonebridge is the first free, open-source, Mac-free iMessage bridge for Linux.** The empirical proof is in [`spike/RESULTS.md`](spike/RESULTS.md) §6.
 
-## Installation
+## 📋 Requirements
+
+| | Minimum | Tested with |
+|---|---|---|
+| **OS** | Linux + GNOME, BlueZ 5.72+ | Pop!_OS 24.04 |
+| **Bluetooth adapter** | Intel chipset (for ANCS) | Intel AX-series |
+| **Python** | 3.10+ | 3.12 |
+| **iPhone** | iOS 16.5+ | iPhone 16 Pro Max, iOS 26.5 |
+| **System packages** | `bluez`, `bluez-obexd`, `python3-dbus`, `python3-gi` | — |
+
+> ⚠️ **Adapter chipset matters for ANCS.** Per-app notifications need a real BLE bond with the iPhone. Intel adapters do this reliably. **Realtek adapters and every USB Bluetooth dongle tested so far do *not*** — their firmware negotiates legacy keys that block the cross-transport key derivation iOS needs. SMS/iMessage/contacts (MAP/PBAP) work on any adapter; only ANCS is picky. See [bmh129/ancs4linux's hardware notes](https://github.com/bmh129/ancs4linux).
+
+## 🚀 Installation
+
+### 1 · System packages
 
 ```bash
-# 1. Install Bluetooth OBEX support (provides MAP + PBAP daemons)
-sudo apt install bluez-obexd
+sudo apt install bluez bluez-obexd python3-dbus python3-gi python3-venv
+```
 
-# 2. Clone the repo
+### 2 · Clone & install
+
+```bash
 git clone https://github.com/gabrielmeir53/iphonebridge.git
 cd iphonebridge
 
-# 3. Create a venv that inherits system PyGObject + dbus-python
-#    (DO NOT install dbus-python or PyGObject from PyPI — those builds are
-#    notoriously fragile. The system packages just work.)
+# A venv that inherits the system PyGObject + dbus-python.
+# (Never install those two from PyPI — the builds are notoriously fragile.)
 python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 pip install -e .
 
-# 3b. Expose `iphonebridge` on your PATH so you don't have to activate the
-#    venv every time you want to run sms-list/sms-send. Most distros have
-#    ~/.local/bin in PATH by default.
+# Put `iphonebridge` on your PATH so it works from any shell
 mkdir -p ~/.local/bin
 ln -sf "$(pwd)/.venv/bin/iphonebridge" ~/.local/bin/iphonebridge
+```
 
-# 4. Verify prerequisites
-iphonebridge doctor
+### 3 · Pair your iPhone
 
-# 5. (One-time) Let the daemon set the adapter Class-of-Device without
-#    a password prompt. Without this, after each reboot you'd have to
-#    manually run `sudo btmgmt class 4 8` before the daemon can open MAP
-#    sessions. See "Why the CoD matters" below.
-sudo bash systemd/install-cod-sudoers.sh
+Pair normally — GNOME **Settings → Bluetooth**, or `bluetoothctl`. Then run the wizard:
 
-# 6. Pair the iPhone with this machine via the normal GNOME Bluetooth panel
-#    or `bluetoothctl pair <MAC>` (then `trust <MAC>`).
+```bash
+iphonebridge pair-setup
+```
 
-# 7. Install the systemd user service
+It finds your iPhone among paired devices, writes `~/.config/iphonebridge/local.env`, and prints the iPhone-side steps.
+
+### 4 · Install the daemon as a service
+
+```bash
 mkdir -p ~/.config/systemd/user
 cp systemd/iphonebridge.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now iphonebridge
-
-# 8. Run the pair-setup wizard. It enumerates paired Bluetooth devices,
-#    picks your iPhone, writes ~/.config/iphonebridge/local.env, and
-#    prints the iPhone-side toggle steps you still need to do.
-iphonebridge pair-setup
-
-# 9. On the iPhone (the wizard reminds you):
-#    Settings → Bluetooth → tap (i) next to this computer's name
-#      • Show Message Notifications: ON   (gates MAP / SMS + iMessage)
-#      • Sync Contacts: ON                (gates PBAP / contacts)
-#    These toggles only surface after the daemon has started once with
-#    the right CoD + BLE advert active. Re-run pair-setup or restart the
-#    daemon if you don't see them on the first try.
-
-# 10. Test
-journalctl --user -u iphonebridge -f
-# (then have someone text you — within seconds you should see the event)
 ```
 
-### Why the CoD matters
+### 5 · iPhone-side toggles
 
-iOS 26.5 (and most versions since iOS 16.5) hides per-device permission toggles for MAP, PBAP, and other Bluetooth profiles **unless** the paired adapter declares itself with the right Class-of-Device + BLE solicit advert. This project encodes that "identity dance" in `src/iphonebridge/bluez_setup.py`:
+On the iPhone: **Settings → Bluetooth → tap the ⓘ next to your computer →** enable
 
-- **CoD = `0x240408`** (Major = Audio/Video, Minor = Hands-Free Device, plus Telephony + Object Transfer + Audio service-class bits) — set via `btmgmt class 4 8` at daemon startup.
-- **BLE peripheral advert with `SolicitUUIDs=[ANCS UUID]`** — registered via `org.bluez.LEAdvertisingManager1.RegisterAdvertisement`.
+- **Show Message Notifications** — gates SMS/iMessage (MAP)
+- **Sync Contacts** — gates contacts (PBAP)
+- **Show System Notifications** — gates per-app notifications (ANCS)
 
-Without that combination, the iPhone's `Settings → Bluetooth → (i)` page won't even show the toggles. With it, the toggles surface within seconds and the OBEX servers (MAP/PBAP) become reachable. This is the single most important non-obvious finding from the Phase 0 spike — see [`spike/RESULTS.md`](spike/RESULTS.md) §1.
+> These toggles only appear once the daemon has run at least once (it sets the adapter's Bluetooth class + advertises correctly). If you don't see them, re-run `iphonebridge pair-setup` and restart the daemon.
 
-## Daily usage
+<details>
+<summary><b>6 · (Optional) Enable per-app notifications — ANCS</b></summary>
+
+ANCS needs a true BLE bond, which only forms during a fresh pairing while the adapter is correctly configured. One-time setup:
 
 ```bash
-# Watch the daemon in real time
+# Install the privileged helper (writes one specific BlueZ setting)
+sudo bash systemd/install-ancs-sudoers.sh
+
+# Apply it and re-pair
+iphonebridge ancs-enable
+```
+
+Then **forget + re-pair** the iPhone one more time (the wizard walks you through it). After the fresh pair, iOS performs cross-transport key derivation and the BLE bond sticks — ANCS notifications start flowing automatically. You only do this once.
+
+</details>
+
+<details>
+<summary><b>(Optional) Persist the Bluetooth class across reboots</b></summary>
+
+```bash
+sudo bash systemd/install-cod-sudoers.sh
+```
+
+Lets the daemon set the adapter's Class-of-Device on every start without a password prompt. Without it you'd occasionally need to re-run setup after a reboot.
+
+</details>
+
+## 💻 Usage
+
+```bash
+# Watch the daemon live
 journalctl --user -u iphonebridge -f
 
-# Show recent SMS events from the local log
+# Recent messages (live from the iPhone)
 iphonebridge sms-list -n 20
+iphonebridge sms-list --from Maddie          # one conversation
+iphonebridge sms-list --source local         # from the daemon's own log
 
-# Force a fresh contact pull (otherwise auto-runs every 24h)
+# Send — recipient can be a phone number OR a contact name
+iphonebridge sms-send "+15551234567" "on my way"
+iphonebridge sms-send Maddie "running late"
+
+# Health check
+iphonebridge doctor
+
+# Force a contacts refresh (otherwise automatic every 24h)
 iphonebridge contacts-sync
 
-# Stop / start / restart
-systemctl --user stop iphonebridge
-systemctl --user start iphonebridge
-systemctl --user restart iphonebridge
-
-# Disable autostart
-systemctl --user disable iphonebridge
+# Service control
+systemctl --user {start,stop,restart} iphonebridge
 ```
 
-The local event log is at `~/.local/state/iphonebridge/events.jsonl` (one JSON object per SMS, append-only) and the contact cache is at `~/.local/state/iphonebridge/contacts.sqlite`. Both are safe to delete; they regenerate.
+Incoming messages appear as **persistent GNOME notifications** — they stay until you either dismiss them on the desktop *or* read the message on your iPhone. Read-state syncs both ways.
 
-## Troubleshooting
+## 🏗️ How it works
 
-### `iphonebridge doctor` complains the CoD is wrong
+```
+            iPhone  (paired: BR/EDR + BLE)
+   ┌───────────┬────────────┬─────────────┐
+   │ MAP       │ PBAP       │ ANCS        │
+   │ (OBEX)    │ (OBEX)     │ (BLE GATT)  │
+   ▼           ▼            ▼
+ messages    contacts    per-app notifs
+   └───────────┴────────────┴─────────────┘
+                    │
+          iphonebridge daemon
+        (Python · GLib · D-Bus)
+                    │
+        ┌───────────┼───────────┐
+        ▼           ▼           ▼
+   libnotify    JSONL log   D-Bus API
+   (desktop)    (history)   (CLI: sms-send…)
+```
 
-Either the boot-time sudoers rule isn't installed yet (run step 5 above) or you're running before `bluetooth.service` is fully up. Try `systemctl --user restart iphonebridge` and watch the logs.
+- **MAP** (Message Access Profile) — read SMS/iMessage, get real-time push of new ones, and send.
+- **PBAP** (Phone Book Access Profile) — pull the iPhone's contacts so messages show names, not numbers.
+- **ANCS** (Apple Notification Center Service) — every app's notifications, over a BLE GATT link.
+- One daemon, pluggable **sinks** (desktop popups, append-only JSONL log), and a **D-Bus service** so the CLI can send messages through the daemon's live session.
 
-### Notifications stop appearing after a while
+Design rationale and the empirical Bluetooth findings that shaped it are in [`spike/RESULTS.md`](spike/RESULTS.md).
 
-Most likely: the iPhone re-locked OBEX sessions after its own internal timeout. Restart the daemon:
+## 🩺 Troubleshooting
 
+<details>
+<summary><b>Messages stopped arriving</b></summary>
+
+The iPhone times out OBEX sessions. Restart the daemon:
 ```bash
 systemctl --user restart iphonebridge
 ```
+If the iOS toggles vanished from Bluetooth settings, forget + re-pair the iPhone.
+</details>
 
-If that doesn't bring them back, try also restarting `obex.service` and re-doing the toggle dance:
+<details>
+<summary><b><code>Forbidden</code> errors in the log</b></summary>
 
-```bash
-systemctl --user restart obex.service
-systemctl --user restart iphonebridge
-```
+An iPhone toggle is off. Check **Settings → Bluetooth → ⓘ → Show Message Notifications / Sync Contacts / Show System Notifications**.
+</details>
 
-If the toggles disappear from the iPhone's Bluetooth settings page, do a fresh unpair and re-pair — the toggles re-surface during a fresh pair when the daemon's advert and CoD are correct.
+<details>
+<summary><b>ANCS notifications never arrive</b></summary>
 
-### `Forbidden` errors in the journald log
+ANCS needs a BLE bond, which needs a fresh pair done with the adapter correctly set up. Run `iphonebridge ancs-enable`, then forget + re-pair the iPhone. Also confirm your adapter is Intel — Realtek and USB dongles can't do it.
+</details>
 
-MAP/PBAP returned OBEX response `0x43`. Almost always means one of the iPhone toggles got disabled. Check `Settings → Bluetooth → (i) → pop-os → Show Message Notifications` / `Sync Contacts`.
+<details>
+<summary><b><code>iphonebridge: command not found</code></b></summary>
 
-### Daemon won't start
+The CLI lives in the venv. Either `source .venv/bin/activate`, or create the `~/.local/bin` symlink from install step 2.
+</details>
 
-```bash
-systemctl --user status iphonebridge
-journalctl --user -u iphonebridge -n 50
-```
+## 🚧 Limitations
 
-Common culprits:
-- Adapter MAC wrong in `src/iphonebridge/config.py`.
-- iPhone not currently paired or not connected.
-- `bluez-obexd` not installed (run step 1 above).
-- The user-bus session isn't available (e.g. running under SSH without a graphical session) — set `XDG_RUNTIME_DIR` correctly.
+These are Apple's Bluetooth-stack limits, not bugs:
 
-### `btmgmt` hangs
+- No iMessage **attachments, reactions, read receipts, or typing indicators** (MAP doesn't carry them).
+- No **group iMessage / MMS / RCS** — MAP is 1-to-1 only.
+- No **incoming-call audio** routed to the desktop yet (HFP HF role — planned).
+- Notification *bodies* are subject to the iPhone's "Show Previews" setting.
 
-If you try to set the CoD by hand while the daemon is running, `btmgmt class` will deadlock because the daemon's BLE advert is active. Stop the daemon first, or let the daemon do it for you at startup. See [`spike/RESULTS.md`](spike/RESULTS.md) §9.
+## 🗺️ Roadmap
 
-## Architecture
+- **HFP HF role** — take iPhone calls through laptop speakers/mic.
+- **GTK4 / libadwaita UI** — a real conversation window, not just notifications.
+- Flatpak packaging.
 
-```
-                    iPhone (BR/EDR paired + bonded + trusted)
-                                    │
-              ┌───────────── BT Classic (OBEX, RFCOMM) ─┐
-              │                                          │
-        MAP MNS push                              PBAP PullAll
-        (new-SMS events)                          (vCard transfer)
-              │                                          │
-              ↓                                          ↓
-  ┌───────────────────────────────────────────────────────────────┐
-  │              iphonebridge daemon (Python, GLib mainloop)      │
-  │                                                                │
-  │  obex/sessions.py   ←   long-lived MAP + PBAP sessions        │
-  │  obex/map_events.py ←   InterfacesAdded → Message1.Get        │
-  │  obex/bmessage.py   ←   parse VCARD originator + MSG body     │
-  │  contacts.py        ←   SQLite cache, phone-number lookup     │
-  │  bluez_setup.py     ←   CoD dance + BLE advert at startup     │
-  │                                                                │
-  │                          ↓ pub/sub                              │
-  │                          ↓                                      │
-  │           sinks/libnotify.py  ──→  GNOME notification           │
-  │           sinks/jsonl.py      ──→  events.jsonl event log      │
-  └───────────────────────────────────────────────────────────────┘
-```
+See [`BACKLOG.md`](BACKLOG.md).
 
-Key design decisions:
+## 🙏 Credits
 
-- **Single daemon, DBus boundary at daemon ↔ UI.** Most prior art (ancs4linux) splits into 3-4 separate daemons coordinated over DBus. We keep one process with internal pub/sub so the GLib mainloop and the BlueZ object state stay in one address space — simpler, fewer races. The DBus seam is reserved for future UI clients to subscribe to.
-- **Python + dasbus + GLib + PyGObject.** Battle-tested combo; system packages (`python3-dbus`, `python3-gi`) instead of fragile PyPI builds.
-- **System sessions persist across the daemon's lifetime.** iPhone refuses repeat OBEX connects within a short window — opening fresh sessions per query gets `0x43 Forbidden`. We open one MAP and one PBAP session at startup and keep them alive. See `spike/RESULTS.md` §2.
-- **SMS body lives in `Subject`.** MAP's `Message1` properties put the SMS text in the `Subject` field, not a separate body field. Saves a roundtrip per message. See `spike/RESULTS.md` §3.
-- **Event sinks are pluggable.** Adding a new output (DBus service for desktop widgets, webhook to a notification aggregator, etc.) is one new file in `src/iphonebridge/sinks/`.
+iphonebridge stands on the shoulders of two prior projects, both GPL-2.0:
 
-## Configuration
+- **[bmh129/ancs4linux](https://github.com/bmh129/ancs4linux)** — an actively-maintained 2026 fork whose empirical work on BR/EDR-vs-BLE coexistence, the `LastUsedBearer=le` unlock, and adapter compatibility made iphonebridge's ANCS support possible. The ANCS wire-format code in [`src/iphonebridge/ancs/`](src/iphonebridge/ancs/) is derived from their `observer/ancs/` modules.
+- **[pzmarzly/ancs4linux](https://github.com/pzmarzly/ancs4linux)** — the original 2022 reference implementation of ANCS on Linux.
 
-Most settings live in `src/iphonebridge/config.py`. Environment overrides:
+## 📄 License
 
-| Env var | Default | Purpose |
-|---|---|---|
-| `IPHONEBRIDGE_MAC` | hard-coded author's MAC | Target iPhone Bluetooth MAC |
-| `IPHONEBRIDGE_ADAPTER` | `hci0` | Which local BT adapter |
-| `XDG_STATE_HOME` | `~/.local/state` | Where events.jsonl + contacts.sqlite live |
-
-## Roadmap
-
-See [`BACKLOG.md`](BACKLOG.md) for the full list. Major upcoming work:
-
-- **Phase 2a — ANCS for per-app notifications.** Mirror Slack, WhatsApp, Mail, iMessage *headers* (titles only, not bodies) over BLE. Requires solving the BR/EDR-vs-BLE pairing conflict. Likely path: dual-pair (same iPhone bonded over both modes) or a second BT adapter dedicated to BLE.
-- **Phase 2b — MAP send.** SMS reply path. Document iMessage caveat explicitly (replies arrive as green bubbles).
-- **Phase 2c — HFP HF role.** Accept incoming iPhone calls through laptop speakers/mic. Blocked on WirePlumber 1.5 config investigation.
-- **Phase 3 — GTK4/libadwaita tray UI** and proper Flatpak packaging.
-
-## Contributing
-
-This is a one-person project right now. PRs welcome but expect slow review. Open an issue first if you want to discuss anything non-trivial.
-
-### Development setup
-
-After cloning + venv setup above:
-
-```bash
-pip install -e ".[dev]"   # adds pytest + ruff
-ruff check src/
-# pytest tests/   (no tests yet — see BACKLOG.md)
-```
-
-The Phase 0 spike scripts under `spike/` are the easiest way to test individual Bluetooth profile behavior in isolation. They're throwaway-quality but well-commented.
-
-## Credits
-
-This project stands on top of two excellent prior efforts:
-
-- **[bmh129/ancs4linux](https://github.com/bmh129/ancs4linux)** — an actively-maintained 2026 fork of pzmarzly's original. Its empirical write-ups on BR/EDR-vs-BLE coexistence on iOS 18+, the `LastUsedBearer=le` unlock, and the hardware-compatibility matrix (Intel-only, no USB BT adapters) are what made iphonebridge's v0.2.0 ANCS support possible. The ANCS wire-format constants and parser logic in `src/iphonebridge/ancs/{constants,parsers}.py` are derived from their `observer/ancs/` modules.
-- **[pzmarzly/ancs4linux](https://github.com/pzmarzly/ancs4linux)** — the established 2022 baseline implementation. Last commit May 2022, but its four-daemon DBus architecture and ANCS observer patterns established the reference implementation everything later forks (including this one) work from.
-
-Both are GPL-2.0-or-later, hence iphonebridge's licensing.
-
-## Related projects
-
-- [Microsoft Phone Link](https://learn.microsoft.com/en-us/windows/whats-new/whats-new-in-windows-11) — the Windows equivalent. Uses MAP/PBAP/HFP too but with polished UX backed by a full Windows team.
-- [BlueBubbles](https://bluebubbles.app/) / [AirMessage](https://airmessage.org/) — Mac-relay-based iMessage on Linux. Different problem (requires a Mac), different protocol path.
-- [Beeper](https://www.beeper.com/) — paid commercial iMessage bridge.
-
-## License
-
-GPL-2.0-or-later. See [`LICENSE`](LICENSE). Chosen for code-port compatibility with `ancs4linux` (whose GATT subscription patterns will be borrowed for Phase 2a).
+[GPL-2.0-or-later](LICENSE) · © 2026 Gabe Shatunovsky
