@@ -47,6 +47,7 @@ from iphonebridge.obex.sessions import SessionManager
 log = logging.getLogger(__name__)
 
 BUS_NAME = "com.gabriel.iphonebridge"
+BUS_NAME_ALIAS = "com.gabriel.IPhoneBridge"
 OBJECT_PATH = "/com/gabriel/iphonebridge"
 IFACE = "com.gabriel.iphonebridge.Messages1"
 CALLS_IFACE = "com.gabriel.iphonebridge.Calls1"
@@ -285,3 +286,21 @@ def claim_bus_name() -> dbus.service.BusName:
         do_not_queue=True,
         replace_existing=False,
     )
+
+
+def claim_bus_alias() -> dbus.service.BusName | None:
+    """Also claim com.gabriel.IPhoneBridge so other UIs can subscribe
+
+    under the capitalized alias from BACKLOG. Best-effort — if the alias
+    is already taken or the bus is unavailable, return None and let the
+    primary name carry the service.
+    """
+    try:
+        return dbus.service.BusName(
+            BUS_NAME_ALIAS,
+            bus=session_bus,
+            do_not_queue=True,
+            replace_existing=False,
+        )
+    except dbus.exceptions.DBusException:
+        return None

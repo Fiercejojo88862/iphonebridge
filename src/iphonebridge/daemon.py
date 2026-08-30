@@ -29,7 +29,7 @@ from iphonebridge.ancs.client import AncsClient
 from iphonebridge.ancs.events import AncsEvent
 from iphonebridge.bus import main_loop, system_bus
 from iphonebridge.contacts import ContactsResolver, pull_phonebook
-from iphonebridge.dbus_service import MessagesService, claim_bus_name
+from iphonebridge.dbus_service import MessagesService, claim_bus_alias, claim_bus_name
 from iphonebridge.events import SmsEvent, sms_sent_event
 from iphonebridge.hfp.events import CallEvent
 from iphonebridge.hfp.ofono_client import HfpManager
@@ -65,6 +65,7 @@ class Daemon:
         self._contacts_refresh_id: int | None = None
         self._session_retry_id: int | None = None
         self._bus_name = None
+        self._bus_alias = None
         self._dbus_service: MessagesService | None = None
         self._post_sessions_done = False
         # Suspend/resume handling (see _setup_resume_handler)
@@ -121,6 +122,13 @@ class Daemon:
                 self._bus_name, self.sessions, hfp=self.hfp,
                 on_sent=self._record_sent)
             log.info("DBus service ready: com.gabriel.iphonebridge")
+            # Alias for other UIs (BACKLOG: com.gabriel.IPhoneBridge)
+            try:
+                self._bus_alias = claim_bus_alias()
+                if self._bus_alias is not None:
+                    log.info("DBus alias ready: com.gabriel.IPhoneBridge")
+            except Exception:
+                log.debug("DBus alias claim failed", exc_info=True)
         except Exception:
             log.exception("DBus service registration failed — continuing "
                           "without send capability")
