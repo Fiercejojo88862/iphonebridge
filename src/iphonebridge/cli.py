@@ -57,7 +57,7 @@ def doctor(verbose: bool = typer.Option(False, "-v", "--verbose")):
     else:
         log.info("bluez-obexd installed")
 
-    # Adapter CoD
+    # Adapter CoD + powered
     cod = bluez_setup.current_cod()
     if cod is None:
         log.error("Adapter %s not reachable via DBus", config.ADAPTER)
@@ -73,14 +73,126 @@ def doctor(verbose: bool = typer.Option(False, "-v", "--verbose")):
             log.warning("    sudo btmgmt class %d %d",
                         config.COD_MAJOR, config.COD_MINOR)
             ok = False
+        # Adapter powered?
+        try:
+            import dbus
 
-    # State dir writable
+            from iphonebridge.bus import system_bus
+            powered = bool(dbus.Interface(
+                system_bus.get_object("org.bluez", f"/org/bluez/{config.ADAPTER}"),
+                "org.freedesktop.DBus.Properties",
+            ).Get("org.bluez.Adapter1", "Powered"))
+            if powered:
+                log.info("Adapter %s powered: yes", config.ADAPTER)
+            else:
+                log.warning("Adapter %s powered: no — run: bluetoothctl power on", config.ADAPTER)
+                ok = False
+        except Exception:
+            log.debug("Could not read Adapter Powered", exc_info=True)
+
+    # iPhone device paired/trusted/connected (via BlueZ)
+    if config.IPHONE_MAC.upper() not in ("AA:BB:CC:DD:EE:FF", ""):
+        try:
+            from iphonebridge.pair_setup import list_paired_devices
+            devices = {d.mac.upper(): d for d in list_paired_devices()}
+            dev = devices.get(config.IPHONE_MAC.upper())
+            if dev is None:
+                log.warning(
+                    "iPhone %s not found among paired — pair first: "
+                    "bluetoothctl or GNOME Settings → Bluetooth",
+                    config.IPHONE_MAC)
+                ok = False
+            else:
+                log.info("iPhone device: %s (%s) trusted=%s connected=%s",
+                         dev.name, dev.mac, dev.trusted, dev.connected)
+                if not dev.trusted:
+                    log.warning("  → not trusted — run: bluetoothctl trust %s", dev.mac)
+                    ok = False
+                if not dev.connected:
+                    log.warning(
+                        "  → not connected — on iPhone: Settings → Bluetooth "
+                        "→ tap your computer, ensure connected; or "
+                        "bluetoothctl connect %s", dev.mac)
+                    # Not fatal — daemon retries, but warn
+        except Exception:
+            log.debug("Could not list paired devices", exc_info=True)
+
+    # obexd user service active?
+    try:
+        import subprocess
+        r = subprocess.run(["systemctl", "--user", "is-active", "obex.service"],
+                           capture_output=True, text=True, timeout=5)
+        if r.stdout.strip() == "active":
+            log.info("obex.service active: yes")
+        else:
+            detail = r.stdout.strip() or r.stderr.strip()
+            log.warning(
+                "obex.service not active (%s) — daemon restarts it on demand, "
+                "but check: systemctl --user status obex.service", detail)
+    except Exception:
+        log.debug("Could not check obex.service", exc_info=True)
+
+    # State dir writable + contacts cache
     try:
         config.ensure_dirs()
         log.info("State dir writable: %s", config.STATE_DIR)
+        from iphonebridge.contacts import ContactsResolver
+        n_contacts = ContactsResolver().count()
+        if n_contacts:
+            log.info("Contacts cached: %d", n_contacts)
+        else:
+            log.warning(
+                "Contacts cached: 0 — run: iphonebridge contacts-sync "
+                "(needs iPhone Sync Contacts toggle on)")
     except OSError as e:
         log.error("State dir not writable: %s", e)
         ok = False
+    except Exception:
+        log.debug("Contacts check failed", exc_info=True)
+
+    # Daemon D-Bus health (IsHealthy) — best-effort
+    try:
+        import dbus
+        import dbus.mainloop.glib
+        dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+        bus = dbus.SessionBus()
+        proxy = bus.get_object("com.gabriel.iphonebridge", "/com/gabriel/iphonebridge")
+        iface = dbus.Interface(proxy, "com.gabriel.iphonebridge.Messages1")
+        healthy = bool(iface.IsHealthy(timeout=5))
+        if healthy:
+            log.info("Daemon D-Bus: reachable and MAP session healthy")
+        else:
+            log.warning(
+                "Daemon D-Bus: reachable but MAP session not healthy — "
+                "check iPhone toggles: Settings → Bluetooth → (i) → "
+                "Show Message Notifications / Sync Contacts")
+            ok = False
+    except Exception as e:
+        log.warning(
+            "Daemon D-Bus not reachable (%s) — is it running? "
+            "systemctl --user status iphonebridge", e)
+        # Not fatal for doctor if daemon not running — user may be pre-setup
+
+    # HFP prerequisites (optional, info only)
+    try:
+        import shutil
+        from pathlib import Path
+        has_ofono = bool(shutil.which("ofonod")) or Path(
+            "/usr/sbin/ofonod").exists()
+        wireplumber_conf = Path.home() / (
+            ".config/wireplumber/wireplumber.conf.d/51-bluez-hfp-hf.conf")
+        if has_ofono:
+            log.info("oFono installed: yes")
+        else:
+            log.info("oFono installed: no — for calls, sudo apt install ofono (optional)")
+        if wireplumber_conf.exists():
+            log.info("WirePlumber HFP config present: %s", wireplumber_conf)
+        else:
+            log.info(
+                "WirePlumber HFP config: not present — "
+                "run iphonebridge hfp-enable for calls (optional)")
+    except Exception:
+        log.debug("HFP check failed", exc_info=True)
 
     if ok:
         typer.echo(typer.style("All checks passed.", fg=typer.colors.GREEN))
