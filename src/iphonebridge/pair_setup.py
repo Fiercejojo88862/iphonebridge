@@ -75,9 +75,41 @@ def trust_device(mac: str, adapter_path: str) -> None:
     props.Set("org.bluez.Device1", "Trusted", dbus.Boolean(True))
 
 
+def _read_existing_macs() -> list[str]:
+    if not LOCAL_ENV_PATH.exists():
+        return []
+    macs: list[str] = []
+    try:
+        for line in LOCAL_ENV_PATH.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            k, v = k.strip(), v.strip().strip('"').strip("'")
+            if k in ("IPHONEBRIDGE_MACS", "IPHONEBRIDGE_MAC"):
+                for chunk in v.replace(",", " ").split():
+                    c = chunk.strip().upper()
+                    if c and c not in macs:
+                        macs.append(c)
+    except OSError:
+        pass
+    return macs
+
+
 def write_local_env(mac: str) -> Path:
     LOCAL_ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
-    LOCAL_ENV_PATH.write_text(f"IPHONEBRIDGE_MAC={mac}\n")
+    existing = _read_existing_macs()
+    mac_up = mac.strip().upper()
+    if mac_up not in existing:
+        existing.append(mac_up)
+    # Prefer the new multi-device key; keep legacy single for compat if only one
+    if len(existing) == 1:
+        content = f"IPHONEBRIDGE_MAC={existing[0]}\n"
+    else:
+        content = f"IPHONEBRIDGE_MACS=\"{','.join(existing)}\"\n"
+        # Also write legacy single for backward compat (first entry)
+        content += f"IPHONEBRIDGE_MAC={existing[0]}\n"
+    LOCAL_ENV_PATH.write_text(content)
     os.chmod(LOCAL_ENV_PATH, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
     return LOCAL_ENV_PATH
 
@@ -137,11 +169,20 @@ def run_wizard(*, restart_after: bool = True) -> int:
                 "Run `bluetoothctl trust {chosen.mac}` manually.",
                 fg=typer.colors.YELLOW))
 
-    # Write local.env
+    # Write local.env (multi-device aware — appends to IPHONEBRIDGE_MACS)
     p = write_local_env(chosen.mac)
-    typer.echo(typer.style(
-        f"✓ Wrote IPHONEBRIDGE_MAC={chosen.mac} to {p}",
-        fg=typer.colors.GREEN))
+    try:
+        existing = _read_existing_macs()
+        if len(existing) > 1:
+            typer.echo(typer.style(
+                f"✓ Added {chosen.mac} to IPHONEBRIDGE_MACS ({','.join(existing)}) in {p}",
+                fg=typer.colors.GREEN))
+        else:
+            typer.echo(typer.style(
+                f"✓ Wrote IPHONEBRIDGE_MAC={chosen.mac} to {p}",
+                fg=typer.colors.GREEN))
+    except Exception:
+        typer.echo(typer.style(f"✓ Wrote {chosen.mac} to {p}", fg=typer.colors.GREEN))
 
     # iPhone-side instructions
     typer.echo(typer.style("\n=== On the iPhone ===\n",

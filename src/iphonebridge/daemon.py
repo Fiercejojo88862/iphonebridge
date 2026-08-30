@@ -7,7 +7,7 @@ Startup order:
   3. ContactsResolver — warm SQLite cache; if empty, pull PBAP
   4. MapEventListener — subscribe to MAP MNS push events
   5. Sinks — register libnotify + jsonl
-  6. DBus service (com.gabriel.iphonebridge.Messages1)
+  6. DBus service (com.gabriel.iphonebridge.Messages1 + alias)
   7. GLib.MainLoop().run()
 
 Shutdown order is the reverse.
@@ -16,6 +16,12 @@ Degraded mode: if MAP/PBAP can't open (typically because the user hasn't
 enabled iPhone toggles yet), the daemon stays alive, logs a clear
 remediation hint, and retries every 60s. This avoids the systemd
 crash-loop we hit in an earlier version.
+
+Multi-device: when IPHONEBRIDGE_MACS contains multiple MACs
+(e.g. "AA:..,BB:.."), the daemon opens one SessionManager + ANCS client +
+MNS listener per device. The first MAC is the primary (backward compat for
+DBus Send/Dial which defaults to primary). Events from all devices fan out
+through the same sinks and D-Bus signals, with device MAC in the payload.
 """
 from __future__ import annotations
 
@@ -54,13 +60,25 @@ SESSION_RETRY_SEC = 60
 RESUME_RECONNECT_DELAY_SEC = 8
 
 
+def _valid_macs() -> list[str]:
+    return [m for m in config.IPHONE_MACS if m.upper() != config.PLACEHOLDER_MAC]
+
+
 class Daemon:
     def __init__(self) -> None:
-        self.sessions = SessionManager()
+        macs = _valid_macs()
+        primary = macs[0] if macs else config.IPHONE_MAC
+        self.sessions = SessionManager(mac=primary)
+        # Extra managers for secondary devices (multi-device mode)
+        self.extra_managers: dict[str, SessionManager] = {
+            m: SessionManager(mac=m) for m in macs[1:]
+        }
         self.contacts = ContactsResolver()
         self.sinks: list[Sink] = []
         self.listener: MapEventListener | None = None
+        self.extra_listeners: dict[str, MapEventListener] = {}
         self.ancs: AncsClient | None = None
+        self.extra_ancs: dict[str, AncsClient] = {}
         self.hfp: HfpManager | None = None
         self._contacts_refresh_id: int | None = None
         self._session_retry_id: int | None = None
@@ -70,8 +88,11 @@ class Daemon:
         self._post_sessions_done = False
         # Suspend/resume handling (see _setup_resume_handler)
         self._resume_match = None
-        self._device_monitor_match = None
+        self._device_monitor_matches: list = []
         self._resume_pending_id: int | None = None
+
+    def _all_managers(self) -> list[SessionManager]:
+        return [self.sessions] + list(self.extra_managers.values())
 
     # ---- lifecycle -------------------------------------------------------
 
@@ -86,20 +107,22 @@ class Daemon:
                 "adapter is in A/V Hands-Free CoD if the toggles aren't there."
             )
 
-        # ANCS — per-app notifications via BLE GATT. Independent of MAP/PBAP;
-        # may or may not work depending on whether BlueZ has established a
-        # BLE link to the iPhone (we don't yet do the LastUsedBearer=le
-        # dance). Either way, the client just waits patiently for the three
-        # ANCS characteristics to appear and subscribes when they do.
-        device_path = (
-            f"/org/bluez/{config.ADAPTER}"
-            f"/dev_{config.IPHONE_MAC.replace(':', '_')}"
-        )
-        self.ancs = AncsClient(device_path, on_event=self._fanout_ancs)
-        self.ancs.start()
+        # ANCS — per-app notifications via BLE GATT, one client per device
+        for mac in _valid_macs():
+            device_path = f"/org/bluez/{config.ADAPTER}/dev_{mac.replace(':', '_')}"
+            client = AncsClient(device_path, on_event=self._fanout_ancs)
+            client.start()
+            if mac == self.sessions.mac:
+                self.ancs = client
+            else:
+                self.extra_ancs[mac] = client
+        if not _valid_macs():
+            # Placeholder config — still create one client for the placeholder path
+            device_path = f"/org/bluez/{config.ADAPTER}/dev_{config.IPHONE_MAC.replace(':', '_')}"
+            self.ancs = AncsClient(device_path, on_event=self._fanout_ancs)
+            self.ancs.start()
 
-        # HFP — take/place calls via oFono. Also independent of MAP/PBAP; if
-        # oFono isn't set up it logs a hint and stays dormant.
+        # HFP — global (oFono handles multiple modems)
         self.hfp = HfpManager(
             on_event=self._fanout_call,
             resolve_contact=lambda raw: self.contacts.resolve(raw),
@@ -110,7 +133,7 @@ class Daemon:
         # HFP events still reach the desktop while MAP/PBAP are degraded.
         self._setup_sinks()
 
-        # Try to open MAP/PBAP. If blocked, stay alive and retry every minute.
+        # Try to open MAP/PBAP for all devices
         self._try_open_sessions(first_attempt=True)
 
         # Always set up the DBus service so a CLI can at least query
@@ -118,6 +141,8 @@ class Daemon:
         # the MAP session is open, but the service surface itself is up.
         try:
             self._bus_name = claim_bus_name()
+            # For multi-device, D-Bus Send/Dial defaults to primary; extra
+            # devices can be addressed via optional --device flag (future).
             self._dbus_service = MessagesService(
                 self._bus_name, self.sessions, hfp=self.hfp,
                 on_sent=self._record_sent)
@@ -148,21 +173,26 @@ class Daemon:
         # _post_sessions_setup, so we don't duplicate it here.
 
     def _try_open_sessions(self, *, first_attempt: bool) -> None:
-        """Open MAP + PBAP. On Forbidden, schedule a periodic retry instead
-        of crashing. Idempotent."""
-        try:
-            self.sessions.open_all()
-        except SessionError as e:
-            msg = str(e)
-            log.warning("could not open MAP/PBAP sessions: %s", msg)
-            if "Forbidden" in msg or "0x43" in msg:
-                log.warning("")
-                log.warning("  → This usually means the iPhone toggles aren't on.")
-                log.warning("  → On the iPhone:")
-                log.warning("       Settings → Bluetooth → tap (i) next to this device")
-                log.warning("       Enable: Show Message Notifications")
-                log.warning("       Enable: Sync Contacts")
-                log.warning("")
+        """Open MAP + PBAP for all devices. On Forbidden, schedule retry."""
+        failed: list[str] = []
+        for mgr in self._all_managers():
+            try:
+                mgr.open_all()
+            except SessionError as e:
+                msg = str(e)
+                log.warning("could not open MAP/PBAP sessions for %s: %s", mgr.mac, msg)
+                failed.append(mgr.mac)
+                if "Forbidden" in msg or "0x43" in msg:
+                    log.warning("")
+                    log.warning(
+                        "  → Toggles off for %s — check iPhone Bluetooth (i).",
+                        mgr.mac)
+                    log.warning("  → On the iPhone:")
+                    log.warning("       Settings → Bluetooth → tap (i) next to this device")
+                    log.warning("       Enable: Show Message Notifications")
+                    log.warning("       Enable: Sync Contacts")
+                    log.warning("")
+        if failed:
             if first_attempt and self._session_retry_id is None:
                 self._session_retry_id = GLib.timeout_add_seconds(
                     SESSION_RETRY_SEC, self._retry_sessions
@@ -176,16 +206,20 @@ class Daemon:
     def _retry_sessions(self) -> bool:
         """GLib timer callback. Return True to keep the timer firing."""
         log.info("retrying MAP/PBAP session open ...")
-        try:
-            self.sessions.open_all()
-        except SessionError as e:
-            # Still blocked — keep timer alive
-            log.info("still blocked: %s", str(e)[:120])
+        still_failed = False
+        for mgr in self._all_managers():
+            if mgr.map is not None:
+                continue
+            try:
+                mgr.open_all()
+                log.info("sessions opened on retry for %s — promoting", mgr.mac)
+            except SessionError as e:
+                log.info("still blocked for %s: %s", mgr.mac, str(e)[:120])
+                still_failed = True
+        if still_failed:
             return True
-
-        log.info("sessions opened on retry — promoting to ready state")
+        log.info("all sessions opened on retry — promoting to ready state")
         self._post_sessions_setup()
-        # Stop the retry timer
         self._session_retry_id = None
         return False
 
@@ -212,7 +246,7 @@ class Daemon:
             return
         self._post_sessions_done = True
 
-        # Warm contacts; if empty, do a one-time pull. PBAP pull is cheap.
+        # Warm contacts; if empty, do a one-time pull from primary
         if self.contacts.count() == 0:
             log.info("contacts cache empty — pulling from iPhone via PBAP")
             self._refresh_contacts()
@@ -223,23 +257,32 @@ class Daemon:
                 CONTACTS_REFRESH_SEC, self._periodic_refresh_contacts
             )
 
-        # Wire up MAP MNS listener.
-        # IMPORTANT: pass an indirect lambda so the resolver can be refreshed
-        # in place via self.contacts.refresh() without breaking this binding.
-        if self.listener is None:
+        # Wire up MAP MNS listeners — one per device
+        if self.listener is None and self.sessions.map is not None:
             self.listener = MapEventListener(
                 sessions=self.sessions,
                 on_sms=self._fanout,
                 resolve_contact=lambda raw: self.contacts.resolve(raw),
             )
             self.listener.start()
+        for mac, mgr in self.extra_managers.items():
+            if mac in self.extra_listeners or mgr.map is None:
+                continue
+            lst = MapEventListener(
+                sessions=mgr,
+                on_sms=self._fanout,
+                resolve_contact=lambda raw: self.contacts.resolve(raw),
+            )
+            lst.start()
+            self.extra_listeners[mac] = lst
 
-        log.info("=== iphonebridge ready (contacts=%d, sinks=%s) ===",
-                 self.contacts.count(),
-                 [s.name for s in self.sinks])
+        log.info("=== iphonebridge ready (contacts=%d, sinks=%s, devices=%s) ===",
+                  self.contacts.count(),
+                  [s.name for s in self.sinks],
+                  [m.mac for m in self._all_managers()])
 
     def _refresh_contacts(self) -> None:
-        """Pull phonebook from iPhone + reload in-process cache. Idempotent."""
+        """Pull phonebook from primary iPhone + reload in-process cache."""
         try:
             pulled = pull_phonebook(self.sessions)
             count = self.contacts.refresh()
@@ -269,19 +312,35 @@ class Daemon:
             except Exception:
                 pass
             self._resume_match = None
-        if self._device_monitor_match is not None:
+        for m in list(self._device_monitor_matches):
             try:
-                self._device_monitor_match.remove()
+                m.remove()
             except Exception:
                 pass
-            self._device_monitor_match = None
+        self._device_monitor_matches = []
         if self.listener is not None:
             self.listener.stop()
+        for lst in list(self.extra_listeners.values()):
+            try:
+                lst.stop()
+            except Exception:
+                pass
+        self.extra_listeners = {}
         if self.ancs is not None:
             self.ancs.stop()
+        for ac in list(self.extra_ancs.values()):
+            try:
+                ac.stop()
+            except Exception:
+                pass
+        self.extra_ancs = {}
         if self.hfp is not None:
             self.hfp.stop()
-        self.sessions.close_all()
+        for mgr in self._all_managers():
+            try:
+                mgr.close_all()
+            except Exception:
+                pass
         bluez_setup.unregister_advert()
         main_loop.quit()
 
@@ -353,7 +412,7 @@ class Daemon:
         * ``PrepareForSleep(True)``  → going to sleep, just log.
         * ``PrepareForSleep(False)`` → resumed, schedule a reconnect after
           ``RESUME_RECONNECT_DELAY_SEC`` so BlueZ/obexd settle.
-        * BlueZ ``PropertiesChanged`` on the iPhone device's ``Connected``
+        * BlueZ ``PropertiesChanged`` on each iPhone device's ``Connected``
           → if the device disconnects outside suspend, schedule the same
           delayed reconnect (covers adapter power-cycle, iPhone BT toggle).
 
@@ -374,22 +433,21 @@ class Daemon:
             log.debug("login1 PrepareForSleep subscribe failed — continuing without it",
                       exc_info=True)
 
-        # BlueZ device Connected — device path derived from adapter + MAC
-        device_path = (
-            f"/org/bluez/{config.ADAPTER}"
-            f"/dev_{config.IPHONE_MAC.replace(':', '_')}"
-        )
-        try:
-            self._device_monitor_match = system_bus.add_signal_receiver(
-                self._on_device_properties_changed,
-                dbus_interface="org.freedesktop.DBus.Properties",
-                signal_name="PropertiesChanged",
-                path=device_path,
-            )
-            log.info("suspend/resume handler: monitoring %s Connected", device_path)
-        except Exception:
-            log.debug("BlueZ device monitor subscribe failed — continuing",
-                      exc_info=True)
+        # BlueZ device Connected — one monitor per MAC
+        for mac in _valid_macs() or [config.IPHONE_MAC]:
+            device_path = f"/org/bluez/{config.ADAPTER}/dev_{mac.replace(':', '_')}"
+            try:
+                m = system_bus.add_signal_receiver(
+                    self._on_device_properties_changed,
+                    dbus_interface="org.freedesktop.DBus.Properties",
+                    signal_name="PropertiesChanged",
+                    path=device_path,
+                )
+                self._device_monitor_matches.append(m)
+                log.info("suspend/resume handler: monitoring %s Connected", device_path)
+            except Exception:
+                log.debug("BlueZ device monitor subscribe failed for %s — continuing", device_path,
+                          exc_info=True)
 
     def _on_prepare_for_sleep(self, going_to_sleep: bool) -> None:
         # dbus-python delivers a dbus.Boolean — cast to plain bool
@@ -434,7 +492,7 @@ class Daemon:
                 pass
             self._session_retry_id = None
 
-        # Tear down stale OBEX sessions + listener, then re-run the normal
+        # Tear down stale OBEX sessions + listeners, then re-run the normal
         # open/retry path. _post_sessions_done guards idempotency.
         if self.listener is not None:
             try:
@@ -442,18 +500,23 @@ class Daemon:
             except Exception:
                 log.exception("listener stop on resume failed")
             self.listener = None
+        for lst in list(self.extra_listeners.values()):
+            try:
+                lst.stop()
+            except Exception:
+                log.exception("extra listener stop on resume failed")
+        self.extra_listeners = {}
 
-        try:
-            self.sessions.close_all()
-        except Exception:
-            log.exception("session close on resume failed")
+        for mgr in self._all_managers():
+            try:
+                mgr.close_all()
+            except Exception:
+                log.exception("session close on resume failed for %s", mgr.mac)
 
         # Reset the post-setup gate so _post_sessions_setup can run again
         # if the reconnect succeeds.
         was_ready = self._post_sessions_done
-        if was_ready and self.sessions.map is None:
-            # Keep the flag so we don't double-init sinks, but allow listener
-            # re-creation. Only clear when we actually lost the session.
+        if was_ready and any(m.map is None for m in self._all_managers()):
             self._post_sessions_done = False
 
         self._try_open_sessions(first_attempt=True)
@@ -464,16 +527,20 @@ class Daemon:
 
         # Restart ANCS/HFP clients if they stopped (they are independent but
         # also lose their GATT/oFono state across suspend).
-        for attr in ("ancs", "hfp"):
-            client = getattr(self, attr, None)
-            if client is not None:
+        for ac in [self.ancs] + list(self.extra_ancs.values()):
+            if ac is not None:
                 try:
-                    # Cheap no-op if already running — these clients are
-                    # designed to be resilient to restart.
-                    client.stop()
-                    client.start()
-                    log.info("restarted %s client after resume", attr)
+                    ac.stop()
+                    ac.start()
+                    log.info("restarted ANCS client after resume for %s", ac.device_path)
                 except Exception:
-                    log.exception("restart %s after resume failed", attr)
+                    log.exception("restart ANCS after resume failed for %s", ac.device_path)
+        if self.hfp is not None:
+            try:
+                self.hfp.stop()
+                self.hfp.start()
+                log.info("restarted HFP client after resume")
+            except Exception:
+                log.exception("restart HFP after resume failed")
 
         return False

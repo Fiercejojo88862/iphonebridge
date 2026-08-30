@@ -90,29 +90,30 @@ def doctor(verbose: bool = typer.Option(False, "-v", "--verbose")):
         except Exception:
             log.debug("Could not read Adapter Powered", exc_info=True)
 
-    # iPhone device paired/trusted/connected (via BlueZ)
-    if config.IPHONE_MAC.upper() not in ("AA:BB:CC:DD:EE:FF", ""):
+    # iPhone device(s) paired/trusted/connected (via BlueZ)
+    valid_macs = [m for m in config.IPHONE_MACS if m.upper() != config.PLACEHOLDER_MAC]
+    if valid_macs:
         try:
             from iphonebridge.pair_setup import list_paired_devices
             devices = {d.mac.upper(): d for d in list_paired_devices()}
-            dev = devices.get(config.IPHONE_MAC.upper())
-            if dev is None:
-                log.warning(
-                    "iPhone %s not found among paired — pair first: "
-                    "bluetoothctl or GNOME Settings → Bluetooth",
-                    config.IPHONE_MAC)
-                ok = False
-            else:
-                log.info("iPhone device: %s (%s) trusted=%s connected=%s",
-                         dev.name, dev.mac, dev.trusted, dev.connected)
-                if not dev.trusted:
-                    log.warning("  → not trusted — run: bluetoothctl trust %s", dev.mac)
-                    ok = False
-                if not dev.connected:
+            for mac in valid_macs:
+                dev = devices.get(mac.upper())
+                if dev is None:
                     log.warning(
-                        "  → not connected — on iPhone: Settings → Bluetooth "
-                        "→ tap your computer, ensure connected; or "
-                        "bluetoothctl connect %s", dev.mac)
+                        "iPhone %s not found among paired — pair first: "
+                        "bluetoothctl or GNOME Settings → Bluetooth", mac)
+                    ok = False
+                else:
+                    log.info("iPhone device: %s (%s) trusted=%s connected=%s",
+                             dev.name, dev.mac, dev.trusted, dev.connected)
+                    if not dev.trusted:
+                        log.warning("  → not trusted — run: bluetoothctl trust %s", dev.mac)
+                        ok = False
+                    if not dev.connected:
+                        log.warning(
+                            "  → not connected — on iPhone: Settings → Bluetooth "
+                            "→ tap your computer, ensure connected; or "
+                            "bluetoothctl connect %s", dev.mac)
                     # Not fatal — daemon retries, but warn
         except Exception:
             log.debug("Could not list paired devices", exc_info=True)
@@ -203,17 +204,21 @@ def doctor(verbose: bool = typer.Option(False, "-v", "--verbose")):
 
 
 @app.command()
-def contacts_sync(verbose: bool = typer.Option(False, "-v", "--verbose")):
+def contacts_sync(
+    verbose: bool = typer.Option(False, "-v", "--verbose"),
+    device: str = typer.Option(
+        None, "--device", help="Device MAC/index/name (multi-device)"),
+):
     """Force a fresh PBAP pull from the iPhone (rebuilds the contacts cache)."""
     _setup_logging(verbose)
-    # Heavyweight — needs sessions
     from iphonebridge.contacts import pull_phonebook
     from iphonebridge.obex.sessions import SessionManager
-    sm = SessionManager()
+    mac = _resolve_device(device) if device else None
+    sm = SessionManager(mac=mac)
     sm.open_all()
     try:
         n = pull_phonebook(sm)
-        typer.echo(f"Pulled {n} contacts into {config.CONTACTS_DB}")
+        typer.echo(f"Pulled {n} contacts from {mac or config.IPHONE_MAC} into {config.CONTACTS_DB}")
     finally:
         sm.close_all()
 
@@ -228,15 +233,24 @@ def sms_list(
                                     "(e.g. telecom/msg/INBOX or telecom/msg/sent)"),
     from_contact: str = typer.Option(None, "--from",
                                      help="Only show messages from this contact name or phone"),
+    device: str = typer.Option(
+        None, "--device", help="Device MAC/index/name (multi-device, iphone only)"),
 ):
     """Show recent SMS / iMessage history.
 
     --source iphone (default): live MAP query via the running daemon. Shows
         the iPhone's actual recent inbox (or other folder via --folder).
-    --source local: read ~/.local/state/iphonebridge/events.jsonl. Only
+     --source local: read ~/.local/state/iphonebridge/events.jsonl. Only
         shows events the daemon has caught since startup, but works even
         if the daemon isn't running.
     """
+    if device:
+        mac = _resolve_device(device)
+        if mac.upper() != config.IPHONE_MAC.upper():
+            typer.echo(typer.style(
+                f"--device {mac} requested but daemon D-Bus currently routes to primary "
+                f"{config.IPHONE_MAC} (multi-device D-Bus coming soon).",
+                fg=typer.colors.YELLOW))
     import json
     from datetime import datetime
 
@@ -482,6 +496,43 @@ def pair_setup(
 
 
 _RECIPIENT_LOOKS_LIKE_PHONE = __import__("re").compile(r"^\+?[\d\s()\-.]{7,}$")
+_DEVICE_MAC_RE = __import__("re").compile(r"^([0-9A-Fa-f]{2}[:\-]){5}[0-9A-Fa-f]{2}$")
+
+
+def _resolve_device(device: str | None) -> str:
+    """Resolve --device to a MAC. Supports MAC, index (1-based), or name substring."""
+    if not device:
+        return config.IPHONE_MAC
+    device = device.strip()
+    # Index like "1" or "2"
+    if device.isdigit():
+        idx = int(device) - 1
+        macs = [m for m in config.IPHONE_MACS if m.upper() != config.PLACEHOLDER_MAC]
+        if 0 <= idx < len(macs):
+            return macs[idx]
+        typer.echo(typer.style(f"No device #{device} (have {len(macs)}).", fg=typer.colors.RED))
+        raise typer.Exit(code=2)
+    # MAC-like
+    if _DEVICE_MAC_RE.match(device):
+        norm = device.upper().replace("-", ":")
+        valid = [m.upper() for m in config.IPHONE_MACS]
+        if norm in valid:
+            return norm
+        # Allow any MAC if user explicitly passes it (e.g. for pair-setup)
+        return norm
+    # Name substring — try to match among paired devices
+    try:
+        from iphonebridge.pair_setup import list_paired_devices
+        valid_upper = [m.upper() for m in config.IPHONE_MACS]
+        for d in list_paired_devices():
+            if device.lower() in d.name.lower() and d.mac.upper() in valid_upper:
+                return d.mac
+    except Exception:
+        pass
+    typer.echo(typer.style(
+        f"No device matched {device!r}. Use MAC AA:BB:.. or index 1..",
+        fg=typer.colors.RED))
+    raise typer.Exit(code=2)
 
 
 def _resolve_recipient(raw: str) -> str:
@@ -557,6 +608,8 @@ def sms_send(
         help="Recipient: phone (e.g. +15551234567) OR contact name substring "
              "(e.g. 'Maddie')"),
     body: str = typer.Argument(..., help="Message body"),
+    device: str = typer.Option(
+        None, "--device", help="Device MAC/index/name (multi-device)"),
     verbose: bool = typer.Option(False, "-v", "--verbose"),
 ):
     """Send an SMS or iMessage via the running daemon's MAP session.
@@ -567,6 +620,13 @@ def sms_send(
     Requires the daemon to be running (systemctl --user start iphonebridge).
     """
     _setup_logging(verbose)
+    if device:
+        mac = _resolve_device(device)
+        if mac.upper() != config.IPHONE_MAC.upper():
+            typer.echo(typer.style(
+                f"--device {mac} requested but daemon currently uses primary "
+                f"{config.IPHONE_MAC} (multi-device D-Bus device param coming soon).",
+                fg=typer.colors.YELLOW))
 
     # If the recipient doesn't look like a phone, resolve via contacts.
     resolved = _resolve_recipient(recipient)
@@ -621,6 +681,8 @@ def _daemon_iface(iface_name: str):
 def call(
     recipient: str = typer.Argument(...,
         help="Phone number (e.g. +15551234567) OR contact name (e.g. 'Maddie')"),
+    device: str = typer.Option(
+        None, "--device", help="Device MAC/index/name (multi-device)"),
     verbose: bool = typer.Option(False, "-v", "--verbose"),
 ):
     """Place a phone call through the iPhone (HFP Hands-Free).
@@ -629,6 +691,12 @@ def call(
     daemon running and HFP set up — see `iphonebridge hfp-enable`.
     """
     _setup_logging(verbose)
+    if device:
+        mac = _resolve_device(device)
+        if mac.upper() != config.IPHONE_MAC.upper():
+            typer.echo(typer.style(
+                f"--device {mac} (multi-device) — HFP is global via oFono, "
+                "dial will use the active modem.", fg=typer.colors.YELLOW))
     import dbus
 
     resolved = _resolve_recipient(recipient)

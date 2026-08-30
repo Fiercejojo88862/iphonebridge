@@ -31,7 +31,7 @@ Park ideas here so they don't derail Phase 1.
 
 ## Phase 3 / nice-to-have
 - [~] Encrypted SQLite for message cache — **IN PROGRESS 2026-08-29.** Design doc `docs/encrypted-sqlite.md:1` with options A (SQLCipher), B (Fernet), C (gocryptfs); needs your input on key storage/scope before coding.
-- [ ] Multi-device support (currently hard-coded to one iPhone MAC)
+- [x] Multi-device support — **DONE 2026-08-29.** `config.py:41` `IPHONE_MACS` (comma/space list via `IPHONEBRIDGE_MACS`, backward compat `IPHONEBRIDGE_MAC`), `obex/sessions.py:76` `SessionManager(mac=)` + `MultiSessionManager`, `daemon.py:57` per-device `SessionManager`/`AncsClient`/`MapEventListener` (primary + `extra_*`), `pair_setup.py:78` appends to `IPHONEBRIDGE_MACS`, `cli.py:207` `--device` (MAC/index/name) for `contacts-sync`/`sms-list`/`sms-send`/`call` and `doctor` checks all devices.
 - [x] Flatpak packaging — **DONE 2026-08-29.** UI ported to Gio GDBus (no `dbus-python` / system-bus), manifest no longer vendors `python3-dbus` and is ready to build (`packaging/flatpak/com.gabriel.iphonebridge.UI.yml`, `packaging/flatpak/README.md`).
 - [x] iOS version regression test matrix — **IN PROGRESS 2026-08-29 for 27.0 dev beta.** `docs/ios-matrix.md:1` tracks 26.5 baseline + 27.0 dev beta on iPhone 13 Pro; `spike/08_ios27_regression.py:1` aggregates MAP/PBAP/HFP/ANCS checks into `spike/results/ios27_iphone13pro.json`.
 - [x] DBus service `com.gabriel.IPhoneBridge` — **DONE 2026-08-29.** Daemon now claims both `com.gabriel.iphonebridge:1` and alias `com.gabriel.IPhoneBridge:1` (`dbus_service.py:1`, `daemon.py:57`) so other UIs can use either name.

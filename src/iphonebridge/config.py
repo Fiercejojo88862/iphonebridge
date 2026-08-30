@@ -38,13 +38,41 @@ def _load_local_env() -> None:
 _load_local_env()
 
 
-# ---- target device ------------------------------------------------------
+# ---- target device(s) ---------------------------------------------------
 
-IPHONE_MAC: str = os.environ.get("IPHONEBRIDGE_MAC", "AA:BB:CC:DD:EE:FF")
-"""BD_ADDR of the paired iPhone. Set IPHONEBRIDGE_MAC env var to your
-iPhone's MAC, or put it in ~/.config/iphonebridge/local.env which the
-systemd user unit will source. The default is a placeholder — `doctor`
-will refuse to pass until you've overridden it."""
+def _parse_macs(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    # Split on comma or whitespace, strip quotes/spaces, upper-case
+    parts = []
+    for chunk in raw.replace(",", " ").split():
+        c = chunk.strip().strip('"').strip("'").upper()
+        if c:
+            parts.append(c)
+    return parts
+
+
+PLACEHOLDER_MAC = "AA:BB:CC:DD:EE:FF"
+
+_RAW_MACS = os.environ.get("IPHONEBRIDGE_MACS") or os.environ.get(
+    "IPHONEBRIDGE_MAC", PLACEHOLDER_MAC)
+IPHONE_MACS: list[str] = _parse_macs(_RAW_MACS)
+"""All paired iPhones. Set via IPHONEBRIDGE_MACS (comma/space-separated)
+or legacy IPHONEBRIDGE_MAC (single). Stored in ~/.config/iphonebridge/local.env
+as IPHONEBRIDGE_MACS=\"AA:..,BB:..\" for multi-device. The systemd unit sources
+this file, so the daemon sees the same list."""
+# Drop placeholder when we have real devices
+if len(IPHONE_MACS) > 1:
+    _filtered = [m for m in IPHONE_MACS if m != PLACEHOLDER_MAC]
+    if _filtered:
+        IPHONE_MACS = _filtered
+
+# Backward-compat single-device alias (first valid MAC or placeholder)
+_valid_primary = [m for m in IPHONE_MACS if m != PLACEHOLDER_MAC]
+IPHONE_MAC: str = _valid_primary[0] if _valid_primary else (
+    IPHONE_MACS[0] if IPHONE_MACS else PLACEHOLDER_MAC)
+"""Primary iPhone MAC — first valid entry of IPHONE_MACS. New code should use
+IPHONE_MACS and iterate; this stays for single-device call sites."""
 
 ADAPTER: str = os.environ.get("IPHONEBRIDGE_ADAPTER", "hci0")
 """Local Bluetooth adapter."""
