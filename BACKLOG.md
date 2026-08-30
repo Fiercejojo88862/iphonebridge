@@ -33,7 +33,7 @@ Park ideas here so they don't derail Phase 1.
 - [ ] Encrypted SQLite for message cache
 - [ ] Multi-device support (currently hard-coded to one iPhone MAC)
 - [x] Flatpak packaging — **DONE 2026-08-29.** UI ported to Gio GDBus (no `dbus-python` / system-bus), manifest no longer vendors `python3-dbus` and is ready to build (`packaging/flatpak/com.gabriel.iphonebridge.UI.yml`, `packaging/flatpak/README.md`).
-- [ ] iOS version regression test matrix
+- [x] iOS version regression test matrix — **IN PROGRESS 2026-08-29 for 27.0 dev beta.** `docs/ios-matrix.md:1` tracks 26.5 baseline + 27.0 dev beta on iPhone 13 Pro; `spike/08_ios27_regression.py:1` aggregates MAP/PBAP/HFP/ANCS checks into `spike/results/ios27_iphone13pro.json`.
 - [ ] DBus service `com.gabriel.IPhoneBridge` so other UIs can subscribe to events
 
 ## Won't do
