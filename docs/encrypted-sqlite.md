@@ -51,23 +51,38 @@ strategy before coding (this is the "stuck" point that needs your input).
   `gocryptfs -init ~/.cipher && gocryptfs ~/.cipher ~/.local/state/iphonebridge`);
   not portable to a fresh laptop without the mount.
 
+## Chosen: Option C — gocryptfs (no code, system-level)
+
+**You picked C.** Implemented as `systemd/enable-encryption.sh:1` — a
+`gocryptfs` overlay:
+
+- Plain view: `~/.local/state/iphonebridge` (what the daemon reads/writes)
+- Cipher backing: `~/.local/state/iphonebridge.cipher` (what gets backed up)
+- Mount via `gocryptfs -q -nosyslog ~/.local/state/iphonebridge.cipher ~/.local/state/iphonebridge`
+- Autostart via `systemd --user enable --now iphonebridge-gocryptfs.service`
+  (see script `--help` for the unit).
+
+**Setup (interactive, one-time):**
+
+```bash
+sudo apt install gocryptfs
+bash systemd/enable-encryption.sh            # init + mount (prompts for password)
+# Or after reboot:
+bash systemd/enable-encryption.sh --mount
+bash systemd/enable-encryption.sh --status   # check
+```
+
+**Why C for your homelab (ASUS Vivobook S16, Omarchy, 32GB):** zero daemon
+code changes, covers both `contacts.sqlite` and `events.jsonl` at once,
+and the backing dir is what you back up — losing the laptop without the
+password yields nothing. If you later want per-file SQLCipher, see Option A
+still documented above.
+
 ## Recommendation for your setup (ASUS Vivobook S16, Omarchy, 32GB)
 
 Start with **Option A** (`sqlcipher`) — it’s the least code and you already
 manage system packages via `apt`. If you prefer no new system dep, fall back
-to **Option B**.
-
-## What I need from you (so I can code it without guessing)
-
-1. **Key storage:** `.key` file (0600) alone, or also `libsecret` keyring?
-2. **Enforcement:** `IPHONEBRIDGE_ENCRYPT=1` env var to opt-in, or always-on
-   after first setup?
-3. **Scope:** contacts only, or also migrate `events.jsonl` → `messages.sqlite`
-   and encrypt that too?
-
-Reply with `A`/`B`/`C` + answers to 1-3 and I’ll implement the chosen path
-(`src/iphonebridge/crypto.py`, `contacts.py`, `sinks/jsonl.py`) and add
-`iphonebridge encryption-enable` to `cli.py:584`.
+to **Option B**. **You chose C**, so use `systemd/enable-encryption.sh:1`.
 
 ## References
 
