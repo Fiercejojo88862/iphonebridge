@@ -226,12 +226,51 @@ class ContactsResolver:
         norm = normalize_phone(raw)
         if not norm:
             return None
-        # Match exact, or suffix-match (US numbers might be stored 10 vs 11 digit
-        # depending on whether the country code +1 was included). Match in BOTH
-        # directions: a 10-digit incoming might match an 11-digit stored, and
-        # vice versa.
+        # Exact hit.
         if norm in self._mem:
             return self._mem[norm]
+
+        # Normalize for international trunk-``0`` / country-code variance:
+        # ``07700900123`` (UK domestic) vs ``447700900123`` (``+44``) and
+        # ``0612345678`` (FR domestic) vs ``33612345678`` (``+33``) share a
+        # common suffix once the trunk ``0`` is stripped. We also handle the
+        # US ``1`` country code (``+1 555...`` vs ``555...``).
+        def _strip(p: str) -> str:
+            # Strip trunk zeros, then a leading ``1`` for NANP if that leaves
+            # a 10-digit national number (so ``1555...`` and ``555...`` compare).
+            s = p.lstrip("0")
+            if len(s) == 11 and s.startswith("1"):
+                s = s[1:]
+            return s
+
+        norm_s = _strip(norm)
+        # Need at least 7 digits of overlap to avoid false positives on short
+        # suffixes.
+        MIN_OVERLAP = 7
+
+        best: tuple[int, str] | None = None  # (overlap_len, contact_name)
+        for k, v in self._mem.items():
+            k_s = _strip(k)
+            # Skip very short entries that would over-match.
+            if len(k_s) < MIN_OVERLAP or len(norm_s) < MIN_OVERLAP:
+                continue
+            # Either ends with the other — covers domestic vs international
+            # and 10-vs-11 digit US variance without hard-coding 10.
+            if k_s == norm_s:
+                return v
+            if k_s.endswith(norm_s) and len(norm_s) >= MIN_OVERLAP:
+                overlap = len(norm_s)
+                if best is None or overlap > best[0]:
+                    best = (overlap, v)
+            elif norm_s.endswith(k_s) and len(k_s) >= MIN_OVERLAP:
+                overlap = len(k_s)
+                if best is None or overlap > best[0]:
+                    best = (overlap, v)
+
+        if best is not None:
+            return best[1]
+
+        # Fallback: legacy 10-digit suffix for old US-centric data.
         if len(norm) >= 10:
             tail = norm[-10:]
             for k, v in self._mem.items():

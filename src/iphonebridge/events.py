@@ -14,19 +14,43 @@ from typing import Literal
 # ---- helpers ------------------------------------------------------------
 
 _PHONE_KEEP = re.compile(r"\D")
+# Extension markers — truncate before these when normalizing.
+_PHONE_EXT_RE = re.compile(r"\s*(?:ext\.?|x)\s*\d+\s*$", re.IGNORECASE)
 
 def normalize_phone(raw: str | None) -> str | None:
-    """Reduce a phone string to digits only (E.164-ish minus the +).
+    """Canonicalize a phone string to E.164-ish digits (no ``+``).
 
-    "+1 (561) 235-1044" → "15551234567"
-    "5612351044"        → "5612351044"
-    "Mom"               → None  (looked like a name)
+    Handles the forms seen in MAP / PBAP / user input without pulling in
+    ``phonenumbers``:
+
+    * ``"+1 (561) 235-1044"``      → ``"15551234567"``
+    * ``"0044 7700 900123"``        → ``"447700900123"`` (``00`` → ``+``)
+    * ``"07700 900123"``            → ``"7700900123"`` (kept as-is; resolver
+      handles trunk-``0`` vs ``+44`` via suffix matching)
+    * ``"+33 6 12 34 56 78 x123"``  → ``"33612345678"`` (extension stripped)
+    * ``"Mom"``                     → ``None``  (looked like a name)
+    * ``"555.123.4567"``            → ``"5551234567"``
+
+    Returns ``None`` for non-phones (<7 digits or >15 digits). E.164 max
+    is 15 digits; anything longer is likely a concatenation / garbage.
     """
     if not raw:
         return None
-    digits = _PHONE_KEEP.sub("", raw)
-    # 7+ digits is plausibly a phone number
-    return digits if len(digits) >= 7 else None
+    s = raw.strip()
+    if not s:
+        return None
+    # Strip extension suffix like " x123" / " ext 123"
+    s = _PHONE_EXT_RE.sub("", s).strip()
+    # ``00`` international prefix → treat as ``+``
+    if s.startswith("00"):
+        s = "+" + s[2:]
+    # Keep only digits for the canonical form (drop the leading ``+`` deliberately
+    # so stored and incoming forms compare as digit strings).
+    digits = _PHONE_KEEP.sub("", s)
+    # E.164 bounds: 7 (minimum plausible) to 15 (max per spec)
+    if not (7 <= len(digits) <= 15):
+        return None
+    return digits
 
 
 def parse_map_timestamp(ts: str | None) -> datetime | None:
