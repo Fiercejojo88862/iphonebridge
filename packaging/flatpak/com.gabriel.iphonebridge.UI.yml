@@ -6,9 +6,8 @@
 # repo README); this Flatpak is the UI, which reaches the native daemon over
 # the session bus.
 #
-# STATUS: draft — not yet built. See packaging/flatpak/README.md for the
-# build steps and the one open issue the build must resolve (the UI's
-# dbus-python / system-bus import).
+# STATUS: ready to build — ui/client.py now uses Gio GDBus (no dbus-python
+# / system-bus dependency). The sandboxed UI talks only to the session bus.
 
 id: com.gabriel.iphonebridge.UI
 runtime: org.gnome.Platform
@@ -37,16 +36,6 @@ cleanup:
   - /share/man
 
 modules:
-  # dbus-python is not in the GNOME runtime. The UI's D-Bus client currently
-  # uses it (via iphonebridge.bus). The cleaner fix is to port ui/client.py
-  # to GLib GDBus and drop this module entirely — see packaging/flatpak/README.md.
-  - name: python3-dbus
-    buildsystem: meson
-    sources:
-      - type: git
-        url: https://gitlab.freedesktop.org/dbus/dbus-python.git
-        tag: dbus-python-1.3.2
-
   - name: iphonebridge-ui
     buildsystem: simple
     build-commands:
