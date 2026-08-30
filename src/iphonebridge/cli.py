@@ -49,10 +49,16 @@ def doctor(verbose: bool = typer.Option(False, "-v", "--verbose")):
     else:
         log.info("Target MAC configured: %s", config.IPHONE_MAC)
 
-    # bluez-obexd present?
-    if not os.path.exists("/usr/libexec/bluetooth/obexd"):
-        log.error("bluez-obexd binary not found at /usr/libexec/bluetooth/obexd")
-        log.error("    → sudo apt install bluez-obexd")
+    # bluez-obexd present? (Ubuntu vs Arch paths)
+    obexd_paths = [
+        "/usr/libexec/bluetooth/obexd",
+        "/usr/lib/bluetooth/obexd",
+        "/usr/bin/bt-obex",
+    ]
+    if not any(os.path.exists(p) for p in obexd_paths):
+        log.error("bluez-obexd not found (checked %s)", ", ".join(obexd_paths))
+        log.error("    → Ubuntu: sudo apt install bluez-obexd")
+        log.error("    → Arch: sudo pacman -S bluez bluez-utils (already provides obex via D-Bus)")
         ok = False
     else:
         log.info("bluez-obexd installed")
