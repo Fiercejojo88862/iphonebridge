@@ -27,7 +27,7 @@ from gi.repository import GLib
 from iphonebridge import bluez_setup, config
 from iphonebridge.ancs.client import AncsClient
 from iphonebridge.ancs.events import AncsEvent
-from iphonebridge.bus import main_loop
+from iphonebridge.bus import main_loop, system_bus
 from iphonebridge.contacts import ContactsResolver, pull_phonebook
 from iphonebridge.dbus_service import MessagesService, claim_bus_name
 from iphonebridge.events import SmsEvent, sms_sent_event
@@ -49,6 +49,10 @@ CONTACTS_REFRESH_SEC = 24 * 60 * 60  # 24h
 # (toggles off, paired-but-not-connected, etc.)
 SESSION_RETRY_SEC = 60
 
+# How long after a suspend/resume to wait before re-establishing BT
+# sessions (BlueZ + obexd need a few seconds to settle after resume).
+RESUME_RECONNECT_DELAY_SEC = 8
+
 
 class Daemon:
     def __init__(self) -> None:
@@ -63,6 +67,10 @@ class Daemon:
         self._bus_name = None
         self._dbus_service: MessagesService | None = None
         self._post_sessions_done = False
+        # Suspend/resume handling (see _setup_resume_handler)
+        self._resume_match = None
+        self._device_monitor_match = None
+        self._resume_pending_id: int | None = None
 
     # ---- lifecycle -------------------------------------------------------
 
@@ -116,6 +124,9 @@ class Daemon:
         except Exception:
             log.exception("DBus service registration failed — continuing "
                           "without send capability")
+
+        # Suspend/resume handler — re-establishes OBEX sessions after sleep
+        self._setup_resume_handler()
 
         # Signal handlers
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -236,7 +247,7 @@ class Daemon:
 
     def stop(self) -> None:
         log.info("=== iphonebridge stopping ===")
-        for tid_attr in ("_contacts_refresh_id", "_session_retry_id"):
+        for tid_attr in ("_contacts_refresh_id", "_session_retry_id", "_resume_pending_id"):
             tid = getattr(self, tid_attr, None)
             if tid is not None:
                 try:
@@ -244,6 +255,18 @@ class Daemon:
                 except Exception:
                     pass
                 setattr(self, tid_attr, None)
+        if self._resume_match is not None:
+            try:
+                self._resume_match.remove()
+            except Exception:
+                pass
+            self._resume_match = None
+        if self._device_monitor_match is not None:
+            try:
+                self._device_monitor_match.remove()
+            except Exception:
+                pass
+            self._device_monitor_match = None
         if self.listener is not None:
             self.listener.stop()
         if self.ancs is not None:
@@ -313,3 +336,136 @@ class Daemon:
     def _signal(self, signum, _frame):
         log.info("received signal %d, stopping", signum)
         main_loop.quit()
+
+    # ---- suspend/resume handling ----------------------------------------
+
+    def _setup_resume_handler(self) -> None:
+        """Listen for systemd login1 PrepareForSleep + BlueZ Connected changes.
+
+        * ``PrepareForSleep(True)``  → going to sleep, just log.
+        * ``PrepareForSleep(False)`` → resumed, schedule a reconnect after
+          ``RESUME_RECONNECT_DELAY_SEC`` so BlueZ/obexd settle.
+        * BlueZ ``PropertiesChanged`` on the iPhone device's ``Connected``
+          → if the device disconnects outside suspend, schedule the same
+          delayed reconnect (covers adapter power-cycle, iPhone BT toggle).
+
+        Both are best-effort — if the bus isn't there (e.g. tests / container)
+        we just log and continue.
+        """
+        # login1 — suspend/resume
+        try:
+            self._resume_match = system_bus.add_signal_receiver(
+                self._on_prepare_for_sleep,
+                dbus_interface="org.freedesktop.login1.Manager",
+                signal_name="PrepareForSleep",
+                path="/org/freedesktop/login1",
+                bus_name="org.freedesktop.login1",
+            )
+            log.info("suspend/resume handler: listening for login1 PrepareForSleep")
+        except Exception:
+            log.debug("login1 PrepareForSleep subscribe failed — continuing without it",
+                      exc_info=True)
+
+        # BlueZ device Connected — device path derived from adapter + MAC
+        device_path = (
+            f"/org/bluez/{config.ADAPTER}"
+            f"/dev_{config.IPHONE_MAC.replace(':', '_')}"
+        )
+        try:
+            self._device_monitor_match = system_bus.add_signal_receiver(
+                self._on_device_properties_changed,
+                dbus_interface="org.freedesktop.DBus.Properties",
+                signal_name="PropertiesChanged",
+                path=device_path,
+            )
+            log.info("suspend/resume handler: monitoring %s Connected", device_path)
+        except Exception:
+            log.debug("BlueZ device monitor subscribe failed — continuing",
+                      exc_info=True)
+
+    def _on_prepare_for_sleep(self, going_to_sleep: bool) -> None:
+        # dbus-python delivers a dbus.Boolean — cast to plain bool
+        sleeping = bool(going_to_sleep)
+        if sleeping:
+            log.info("suspend detected (PrepareForSleep=True) — BT sessions will stall")
+            return
+        log.info("resume detected (PrepareForSleep=False) — scheduling reconnect in %ds",
+                 RESUME_RECONNECT_DELAY_SEC)
+        self._schedule_resume_reconnect()
+
+    def _on_device_properties_changed(self, iface, changed, _invalidated) -> None:
+        if iface != "org.bluez.Device1":
+            return
+        if "Connected" not in changed:
+            return
+        connected = bool(changed["Connected"])
+        if connected:
+            log.info("BlueZ device Connected=True — scheduling session check")
+        else:
+            log.info("BlueZ device Connected=False — scheduling reconnect")
+        self._schedule_resume_reconnect()
+
+    def _schedule_resume_reconnect(self) -> None:
+        if self._resume_pending_id is not None:
+            # Already scheduled — don't stack timers
+            return
+        self._resume_pending_id = GLib.timeout_add_seconds(
+            RESUME_RECONNECT_DELAY_SEC, self._resume_reconnect
+        )
+
+    def _resume_reconnect(self) -> bool:
+        """GLib timeout callback after resume / disconnect. Return False to run once."""
+        self._resume_pending_id = None
+        log.info("resume reconnect: tearing down stale sessions and retrying")
+
+        # Stop any in-flight retry timer — we're doing a fresh attempt now
+        if self._session_retry_id is not None:
+            try:
+                GLib.source_remove(self._session_retry_id)
+            except Exception:
+                pass
+            self._session_retry_id = None
+
+        # Tear down stale OBEX sessions + listener, then re-run the normal
+        # open/retry path. _post_sessions_done guards idempotency.
+        if self.listener is not None:
+            try:
+                self.listener.stop()
+            except Exception:
+                log.exception("listener stop on resume failed")
+            self.listener = None
+
+        try:
+            self.sessions.close_all()
+        except Exception:
+            log.exception("session close on resume failed")
+
+        # Reset the post-setup gate so _post_sessions_setup can run again
+        # if the reconnect succeeds.
+        was_ready = self._post_sessions_done
+        if was_ready and self.sessions.map is None:
+            # Keep the flag so we don't double-init sinks, but allow listener
+            # re-creation. Only clear when we actually lost the session.
+            self._post_sessions_done = False
+
+        self._try_open_sessions(first_attempt=True)
+        if not self._post_sessions_done:
+            log.warning("resume reconnect: still degraded — periodic retry continues")
+        else:
+            log.info("resume reconnect: back to ready")
+
+        # Restart ANCS/HFP clients if they stopped (they are independent but
+        # also lose their GATT/oFono state across suspend).
+        for attr in ("ancs", "hfp"):
+            client = getattr(self, attr, None)
+            if client is not None:
+                try:
+                    # Cheap no-op if already running — these clients are
+                    # designed to be resilient to restart.
+                    client.stop()
+                    client.start()
+                    log.info("restarted %s client after resume", attr)
+                except Exception:
+                    log.exception("restart %s after resume failed", attr)
+
+        return False

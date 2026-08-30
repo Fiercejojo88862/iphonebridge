@@ -3,7 +3,7 @@
 Park ideas here so they don't derail Phase 1.
 
 ## Phase 1 polish (after MVP works)
-- [ ] Reconnect-on-suspend-resume logic (laptop sleep breaks BT session)
+- [x] Reconnect-on-suspend-resume logic (laptop sleep breaks BT session) — **DONE 2026-08-29.** Daemon listens for `org.freedesktop.login1.Manager PrepareForSleep` + BlueZ `Device1 Connected` and re-opens MAP/PBAP after `RESUME_RECONNECT_DELAY_SEC=8` (`daemon.py:_setup_resume_handler`).
 - [ ] Notification dismissal sync — when user dismisses libnotify popup, mark SMS read via MAP `Message1.Status = "read"`
 - [ ] First-run pairing wizard (CLI) — guide user through iPhone-side toggles
 - [ ] `iphonebridge sms list` — recent inbox dump
@@ -13,7 +13,7 @@ Park ideas here so they don't derail Phase 1.
 ## Phase 2 (revised after iMessage-over-MAP discovery 2026-05-19)
 
 - [x] **MAP send / iMessage send** (`MessageAccess1.PushMessage`) — **CONFIRMED WORKING 2026-05-19 via spike/07_map_send.py**. iOS routes outgoing to iMessage-capable recipients as iMessage (blue bubble). iphonebridge is now read+send. NEXT: build a proper `iphonebridge sms-send <number> <body>` CLI command backed by a daemon DBus method (so we don't have to stop/restart the daemon to free the MAP session per send).
-- [ ] **Graceful toggle-disabled handling** — when iPhone toggles are off, daemon currently crash-loops via systemd. Should log + back off + wait, not die.
+- [x] **Graceful toggle-disabled handling** — **DONE 2026-05-19.** Daemon stays alive in DEGRADED mode with 60s retry and remediation hint (`daemon.py:_try_open_sessions`). No crash-loop.
 - [ ] **First-run pair-setup wizard** — guide new users through CoD sudoers install + iPhone-side toggles.
 - [ ] **Notification dismissal sync** — dismissing a libnotify popup → mark MAP `Message1.Status = "read"` on the iPhone.
 - [ ] **`iphonebridge sms list` from MAP, not just JSONL** — pull recent inbox on demand via the live MAP session.
@@ -31,9 +31,7 @@ Park ideas here so they don't derail Phase 1.
 ## Phase 3 / nice-to-have
 - [ ] Encrypted SQLite for message cache
 - [ ] Multi-device support (currently hard-coded to one iPhone MAC)
-- [~] Flatpak packaging — draft manifest for the UI in `packaging/flatpak/`
-  (UI-only; daemon stays native). Needs a build pass; see its README for the
-  one open issue (port `ui/client.py` to GDBus to drop the dbus-python module).
+- [x] Flatpak packaging — **DONE 2026-08-29.** UI ported to Gio GDBus (no `dbus-python` / system-bus), manifest no longer vendors `python3-dbus` and is ready to build (`packaging/flatpak/com.gabriel.iphonebridge.UI.yml`, `packaging/flatpak/README.md`).
 - [ ] iOS version regression test matrix
 - [ ] DBus service `com.gabriel.IPhoneBridge` so other UIs can subscribe to events
 
